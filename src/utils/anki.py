@@ -56,13 +56,17 @@ class AnkiConnect:
     def find_notes(self, query):
         return self.invoke("findNotes", query=query)
 
-    def add_note(self, deck_name, model_name, fields, tags=None):
+    def add_note(self, deck_name, model_name, fields, audio=None, tags=None):
         note = {
             "deckName": deck_name,
             "modelName": model_name,
             "fields": fields,
-            "tags": tags or []
+            "tags": tags or [],
         }
+
+        if audio:
+            note["audio"] = audio
+
         return self.invoke("addNote", note=note)
 
     def create_model(self, model_name, in_order_fields, css, card_templates):

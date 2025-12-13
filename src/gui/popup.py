@@ -2,6 +2,7 @@
 import logging
 import threading
 import time
+import datetime
 import hashlib
 from typing import List, Optional
 
@@ -406,7 +407,16 @@ class Popup(QWidget):
                 logger.info(f"Creating new Anki model: {model_name}")
                 
                 # Define model structure
-                in_order_fields = ["Kana", "Sentence", "Picture", "Meaning", "Meaning Japanese", "Pitch", "Reading"]
+                in_order_fields = [
+                    "Kana",
+                    "Sentence",
+                    "Picture",
+                    "Meaning",
+                    "Meaning Japanese",
+                    "Pitch",
+                    "Reading",
+                    "WordAudio",
+                ]
                 
                 css = """
 /* Base card styling */
@@ -585,11 +595,15 @@ ruby:hover rt {
   <div class="sentence-text">{{Sentence}}</div>
   {{/Sentence}}
   
-  {{#Picture}}
-  <div class="image-container">
-    {{Picture}}
-  </div>
-  {{/Picture}}
+    {{#Picture}}
+    <div class="image-container">
+        {{Picture}}
+    </div>
+    {{/Picture}}
+
+    {{#WordAudio}}
+    <div class="meaning-text">[sound:{{WordAudio}}]</div>
+    {{/WordAudio}}
   
   <div class="divider"></div>
   
@@ -634,7 +648,30 @@ ruby:hover rt {
         target_meaning = next((f for f in model_fields if f.lower() in ["meaning", "glossary", "definition", "english"]), None)
         target_sentence = next((f for f in model_fields if f.lower() in ["sentence", "context", "example"]), None)
         target_picture = next((f for f in model_fields if f.lower() in ["picture", "image", "screenshot"]), None)
+        target_audio = next((f for f in model_fields if f.lower() in ["audio", "wordaudio", "sound"]), None)
         target_back = next((f for f in model_fields if f.lower() == "back"), None)
+
+        # Decide where to drop audio. Prefer dedicated audio field, otherwise fall back to an existing field so Anki can inject the sound tag.
+        fallback_audio_field = target_audio or target_back or target_word or target_reading or (model_fields[0] if model_fields else None)
+        audio_payload = None
+        if fallback_audio_field and (word or reading):
+            import urllib.parse
+
+            safe_word = urllib.parse.quote(word or reading)
+            safe_reading = urllib.parse.quote(reading or word)
+            audio_filename = f"meikipop-audio-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}.mp3"
+            audio_payload = [{
+                "url": f"https://assets.languagepod101.com/dictionary/japanese/audiomp3.php?kanji={safe_word}&kana={safe_reading}",
+                "filename": audio_filename,
+                "skipHash": "7e2c2f954ef6051373ba916f000168dc",
+                "fields": [fallback_audio_field],
+            }]
+            if not target_audio:
+                logger.info(f"No dedicated audio field on model; injecting audio into '{fallback_audio_field}'.")
+        elif target_audio:
+            logger.debug("Audio field present but no word/reading to fetch audio for.")
+        else:
+            logger.debug("No audio field found on model and no fallback available; skipping audio attach.")
 
         # 2. Populate fields
         if target_word:
@@ -693,7 +730,7 @@ ruby:hover rt {
         if dedup_tag:
             tags.append(dedup_tag)
 
-        result = anki.add_note(deck_name, model_name, fields, tags=tags)
+        result = anki.add_note(deck_name, model_name, fields, audio=audio_payload, tags=tags)
         if result:
             logger.info(f"Added note: {result}")
         else:
