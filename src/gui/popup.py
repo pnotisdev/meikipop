@@ -38,6 +38,7 @@ class Popup(QWidget):
         self.anki_shortcut_was_pressed = False
         self.copy_shortcut_was_pressed = False
         self.deepl_shortcut_was_pressed = False
+        self.jisho_shortcut_was_pressed = False
         self.last_manual_crop_rect = None  # remember last user crop so Alt+A can reuse it
 
         self.shared_state = shared_state
@@ -105,6 +106,8 @@ class Popup(QWidget):
             self.copy_to_clipboard()
         elif url == "deepl":
             self.open_deepl()
+        elif url == "jisho":
+            self.open_jisho()
 
     def add_to_anki(self, manual_crop=True):
         logger.info(f"Add to Anki clicked (manual_crop={manual_crop})")
@@ -236,6 +239,28 @@ class Popup(QWidget):
             QTimer.singleShot(0, update_label)
         except Exception as e:
             logger.debug(f"Presence check failed: {e}")
+
+    def open_jisho(self):
+        latest_data, latest_context = self.get_latest_data()
+        term = None
+
+        if latest_data:
+            entry = latest_data[0]
+            term = (entry.written_form or entry.reading or "").strip()
+
+        if not term and latest_context:
+            term = (latest_context.get("context_text", "") or "").strip()
+
+        if not term:
+            logger.debug("Jisho lookup skipped: no term available")
+            return
+
+        import webbrowser
+        import urllib.parse
+
+        encoded_term = urllib.parse.quote(term)
+        url = f"https://jisho.org/search/{encoded_term}"
+        webbrowser.open(url)
 
     def open_deepl(self):
         if not self._latest_context:
@@ -796,6 +821,11 @@ ruby:hover rt {
                 self.copy_to_clipboard()
             self.copy_shortcut_was_pressed = copy_pressed
 
+            jisho_pressed = self.input_loop.is_key_pressed('alt+j')
+            if jisho_pressed and not self.jisho_shortcut_was_pressed:
+                self.open_jisho()
+            self.jisho_shortcut_was_pressed = jisho_pressed
+
             deepl_pressed = self.input_loop.is_key_pressed('alt+d')
             if deepl_pressed and not self.deepl_shortcut_was_pressed:
                 self.open_deepl()
@@ -888,8 +918,9 @@ ruby:hover rt {
         # Add buttons
         buttons_html = (
             '<br><br>'
-            '<a href="anki" style="color: cyan; text-decoration: none;">[Add (Crop) - Alt+A]</a> &nbsp; '
-            '<a href="copy" style="color: cyan; text-decoration: none;">[Copy - Alt+C]</a> &nbsp; '
+            '<a href="anki" style="color: cyan; text-decoration: none;">[Add to Anki - Alt+A]</a> &nbsp; '
+            '<a href="copy" style="color: cyan; text-decoration: none;">[Copy Text - Alt+C]</a> &nbsp; '
+            '<a href="jisho" style="color: cyan; text-decoration: none;">[Jisho - Alt+J]</a> &nbsp; '
             '<a href="deepl" style="color: cyan; text-decoration: none;">[DeepL - Alt+D]</a>'
         )
         full_html += buttons_html
