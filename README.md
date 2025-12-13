@@ -4,8 +4,7 @@ Instantly look up Japanese words anywhere on your screen. Meikipop uses OCR to r
 
 ## Demo
 
-https://github.com/user-attachments/assets/51e80ccb-d484-4314-ad5f-27b65e761ec9
-
+https://github.com/user-attachments/assets/c1f60509-afc6-4c06-95f9-7498d35a3127
 ## About this fork
 
 This is a friendly fork of the original project at https://github.com/rtr46/meikipop. Our fork focuses on Anki-first quality-of-life tweaks.
@@ -17,6 +16,7 @@ This is a friendly fork of the original project at https://github.com/rtr46/meik
 - One-tap copy of the recognized text `Alt+C`.
 - Duplicate guard: we skip adding a card if the word already exists in the chosen deck/model and show a short popup message.
 - Cropping (images for anki) has been made possible.
+- Audio works now for Anki Deck (Automated from languagepod101.com)
 
 ## Features from original repository by rtr46
 
