@@ -5,11 +5,24 @@ import pickle
 import time
 import os
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Set
 
 from src.config.config import IS_WINDOWS
 from src.dictionary.yomichan import parse_yomichan_zip
 
 logger = logging.getLogger(__name__) # Get the logger
+
+@dataclass
+class DictionaryEntry:
+    id: int
+    written_form: str
+    reading: str
+    senses: list
+    tags: Set[str]
+    frequency_tags: Set[str]
+    deconjugation_process: tuple
+    priority: float = 0.0
 
 class Dictionary:
     def __init__(self):

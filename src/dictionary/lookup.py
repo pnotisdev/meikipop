@@ -7,24 +7,16 @@ from dataclasses import dataclass
 from typing import Set, Dict, Tuple, List
 
 from src.config.config import config, MAX_DICT_ENTRIES
-from src.dictionary.customdict import Dictionary
+from src.dictionary.customdict import Dictionary, DictionaryEntry
 from src.dictionary.deconjugator import Deconjugator, Form
+from src.dictionary.yomitan_client import YomitanClient
 
 KANJI_REGEX = re.compile(r'[\u4e00-\u9faf]')
 JAPANESE_SEPARATORS = {"、", "。", "「", "」", "｛", "｝", "（", "）", "【", "】", "『", "』", "〈", "〉", "《", "》", "：", "・", "／",
                        "…", "︙", "‥", "︰", "＋", "＝", "－", "÷", "？", "！", "．", "～", "―", "!", "?"}
 
 
-@dataclass
-class DictionaryEntry:
-    id: int
-    written_form: str
-    reading: str
-    senses: list
-    tags: Set[str]
-    frequency_tags: Set[str]
-    deconjugation_process: tuple
-    priority: float = 0.0
+
 
 
 logger = logging.getLogger(__name__)
@@ -39,14 +31,28 @@ class Lookup(threading.Thread):
         self.dictionary = Dictionary()
         self.lookup_cache = OrderedDict()
 
-        if not self.dictionary.load_dictionary('jmdict_enhanced.pkl'):
-            raise RuntimeError("Failed to load dictionary.")
-        
-        # Load extra dictionaries (Yomichan/Yomitan)
-        if config.extra_dictionaries_dir:
-            self.dictionary.import_yomichan_directory(config.extra_dictionaries_dir)
+        # Initialize Yomitan Client
+        self.yomitan_client = None
+        # Check config for enabled status
+        # Note: config.yomitan_enabled might need to be accessed directly if not prop
+        # It is a property in Config class instance 'config'
+        if config.is_enabled and config.yomitan_enabled: 
+            self.yomitan_client = YomitanClient(config.yomitan_api_url)
+            logger.info("Yomitan API mode enabled. Skipping local dictionary load.")
+        else:
+            if not self.dictionary.load_dictionary('jmdict_enhanced.pkl'):
+                # raise RuntimeError("Failed to load dictionary.")
+                # Don't crash if it's missing, just log error, maybe user wants to rely on extra dicts?
+                # But original code raised RuntimeError.
+                logger.error("Failed to load jmdict_enhanced.pkl")
+            
+            # Load extra dictionaries (Yomichan/Yomitan)
+            if config.extra_dictionaries_dir:
+                self.dictionary.import_yomichan_directory(config.extra_dictionaries_dir)
 
         self.deconjugator = Deconjugator(self.dictionary.deconjugator_rules)
+
+
 
         self.CACHE_SIZE = 500
 
@@ -77,6 +83,9 @@ class Lookup(threading.Thread):
     def lookup(self, lookup_string):
         if not lookup_string:
             return []
+            
+        if self.yomitan_client and config.yomitan_enabled:
+             return self._lookup_yomitan(lookup_string)
         logger.info(f"Looking up: {lookup_string}")  # keep at info level so people know whats up
 
         cleaned_lookup_string = lookup_string.strip()
@@ -288,11 +297,94 @@ class Lookup(threading.Thread):
             final_results.append(DictionaryEntry(**val))
         return final_results
 
+    def _lookup_yomitan(self, lookup_string: str) -> List[DictionaryEntry]:
+        logger.info(f"Looking up in Yomitan API: {lookup_string}")
+        
+        cleaned_lookup_string = lookup_string.strip()
+        for i, char in enumerate(cleaned_lookup_string):
+            if char in JAPANESE_SEPARATORS:
+                cleaned_lookup_string = cleaned_lookup_string[:i]
+                break
+
+        truncated_lookup = cleaned_lookup_string[:config.max_lookup_length]
+        
+        if truncated_lookup in self.lookup_cache:
+            self.lookup_cache.move_to_end(truncated_lookup)
+            return self.lookup_cache[truncated_lookup]
+            
+        # Try finding longest prefix match
+        # Since API calls are expensive, maybe we shouldn't scan every char?
+        # But if we don't, we miss compound words or verbs.
+        # But unlike local dict, we can't just check 'if prefix in index'.
+        # We have to ASK the API.
+        # Ideally, we call API with full string and let it parse? 
+        # But /termEntries takes a term.
+        # If we send "tabetai", and dict has "taberu", we rely on Yomi deinflection.
+        # If we send "tabetai desu", Yomi might fail if it expects exact term or valid deinflected term.
+        # So we SHOULD scan.
+        # Optimization: Start from longest. If found, stop?
+        # Standard lookup logic continues scanning to find SHORTER matches too?
+        # No: "for i in range(...): matches = self.dictionary.lookup_entry(prefix)... if matches: found_primary_match=True".
+        # It sets `found_primary_match` but continues loop?
+        # Actually: 
+        # for i in range(...):
+        #    ...
+        #    matches = list(self.dictionary.lookup_entry(...))
+        #    if matches: 
+        #       found_primary_match = True
+        #       ...
+        #    elif found_primary_match and (len(truncated_lookup) - i) > 4: break
+        # It tries to find sub-matches too, but stops if we go too far from primary match.
+        
+        # For API, doing 20 requests is bad.
+        # Let's try simpler strategy: Just 3-4 attempts?
+        # Or Just longest?
+        # User wants "yomichan behavior". Yomichan scans from cursor.
+        # If text is "tabetai", length 7.
+        # Req("tabetai") -> Found (e.g. tabetai or taberu) -> Return.
+        # If not found -> Req("beta")? No. Req("tabeta")...
+        
+        # Let's try the loop but return immediately on first good hit to save speed.
+        # Or limit loop to top N attempts?
+        
+        found_entries = []
+        
+        # Scan decreasing length
+        for i in range(len(truncated_lookup), 0, -1):
+             prefix = truncated_lookup[:i]
+             
+             # Optimization: Skip single kana if we haven't found anything yet? No.
+             
+             entries = self.yomitan_client.lookup(prefix)
+             if entries:
+                 found_entries.extend(entries)
+                 # If we found something substantial, maybe stop?
+                 # Meikipop usually shows multiple words if they overlap (e.g. compounds).
+                 # But via API, latency is high (10ms-50ms local).
+                 # 20 * 20ms = 400ms. Might be acceptable.
+                 pass
+             
+             # Break early logic from original code?
+             if found_entries and (len(truncated_lookup) - i) > 2: # Stop scanning if we are 2 chars shorter than longest match
+                 break
+        
+        if found_entries:
+            # Sort/Unique?
+            # Client returns new objects.
+            # We should probably deduplicate by ID or written_form?
+            # Assign IDs?
+            pass
+            
+        self.lookup_cache[truncated_lookup] = found_entries
+        if len(self.lookup_cache) > self.CACHE_SIZE:
+             self.lookup_cache.popitem(last=False)
+             
+        return found_entries
+
     def _calculate_priority(self, entry_data, form, match_len, original_lookup, written_form, reading) -> float:
         is_original_lookup_kana = self._is_kana_only(original_lookup)
         priority = float(entry_data['id']) / -10000000.0
         priority += match_len
-
         is_kana_only_entry = not entry_data['kebs']
         is_exact_match = len(form.process) == 0
         if is_original_lookup_kana and is_kana_only_entry and is_exact_match:

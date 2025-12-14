@@ -143,6 +143,23 @@ class InputLoop(threading.Thread):
 
         self.started_auto_mode = False
 
+        self.scroll_dy = 0
+        self.scroll_lock = threading.Lock()
+        
+        # Start mouse listener for scroll events
+        self.mouse_listener = mouse.Listener(on_scroll=self.on_scroll)
+        self.mouse_listener.start()
+
+    def on_scroll(self, x, y, dx, dy):
+        with self.scroll_lock:
+            self.scroll_dy += dy
+
+    def get_and_reset_scroll_delta(self):
+        with self.scroll_lock:
+            delta = self.scroll_dy
+            self.scroll_dy = 0
+        return delta
+
     def run(self):
         logger.debug("Input thread started.")
         last_mouse_pos = (0, 0)

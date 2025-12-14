@@ -4,6 +4,7 @@ import os
 import logging
 import hashlib
 from typing import List, Dict, Any
+from . import structured_content
 
 logger = logging.getLogger(__name__)
 
@@ -46,63 +47,24 @@ def parse_yomichan_zip(zip_path: str) -> List[Dict[str, Any]]:
 
     return entries
 
-def _extract_text_recursive(item: Any) -> str:
-    if isinstance(item, str):
-        return item
-    if isinstance(item, list):
-        return "".join(_extract_text_recursive(x) for x in item)
-    if isinstance(item, dict):
-        if item.get('tag') == 'rt':
-            return "" # Skip ruby text
-        if 'content' in item:
-            return _extract_text_recursive(item['content'])
-    return ""
-
-def _handle_structured_content(item: Dict[str, Any]) -> List[str]:
-    lines = []
-    content = item.get('content')
-    
-    if isinstance(content, list):
-        for node in content:
-            if isinstance(node, dict):
-                tag = node.get('tag')
-                if tag in ('ol', 'ul'):
-                    list_items = node.get('content', [])
-                    if isinstance(list_items, list):
-                        for li in list_items:
-                            text = _extract_text_recursive(li)
-                            if text:
-                                lines.append(text)
-                else:
-                    text = _extract_text_recursive(node)
-                    if text:
-                        lines.append(text)
-            elif isinstance(node, str):
-                lines.append(node)
-    elif isinstance(content, str):
-        lines.append(content)
-    elif isinstance(content, dict):
-         lines.append(_extract_text_recursive(content))
-        
-    return lines
-
 def _stringify_glossary(glossary: List[Any]) -> List[str]:
     stringified = []
     for item in glossary:
         if isinstance(item, str):
-            stringified.append(item)
+            stringified.append(structured_content.escape_html(item))
         elif isinstance(item, dict):
             if item.get('type') == 'structured-content':
-                stringified.extend(_handle_structured_content(item))
+                stringified.extend(structured_content.handle_structured_content(item))
             else:
                 # Fallback for unknown structure
-                text = _extract_text_recursive(item)
-                if text:
-                    stringified.append(text)
-                else:
-                    stringified.append(str(item))
+                # We can reuse render_node if it's potentially SC-like, 
+                # but let's keep it safe. 
+                # Actually, render_node handles dicts recursively, so it might be safe.
+                # But original code had _extract_text_recursive as fallback, which eventually returned plain text.
+                # Let's just convert to string and escape.
+                stringified.append(structured_content.escape_html(str(item)))
         else:
-            stringified.append(str(item))
+            stringified.append(structured_content.escape_html(str(item)))
     return stringified
 
 def _convert_yomichan_entry(item: List, dict_title: str) -> Dict[str, Any]:
@@ -148,7 +110,8 @@ def _convert_yomichan_entry(item: List, dict_title: str) -> Dict[str, Any]:
         
         senses = [{
             'glosses': glossary,
-            'pos': pos
+            'pos': pos,
+            'source': dict_title
         }]
 
         # Construct raw elements for Lookup compatibility

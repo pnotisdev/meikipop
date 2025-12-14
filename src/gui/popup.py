@@ -9,7 +9,10 @@ from typing import List, Optional
 from PyQt6.QtCore import QTimer, QPoint, QSize
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QFontInfo
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication
+from PyQt6.QtCore import QTimer, QPoint, QSize
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QFontInfo
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication, QScrollArea
 
 from src.config.config import config, MAX_DICT_ENTRIES, IS_MACOS
 from src.dictionary.lookup import DictionaryEntry
@@ -70,17 +73,52 @@ class Popup(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         self.frame = QFrame()
+        self.frame.setObjectName("PopupFrame")
         self._apply_frame_stylesheet()
         main_layout.addWidget(self.frame)
 
         self.content_layout = QVBoxLayout(self.frame)
         self.content_layout.setContentsMargins(10, 10, 10, 10)
 
+        # Scroll Area
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setStyleSheet("background: transparent;")
+        
+        # Scroll area contents
+        self.scroll_content_widget = QWidget()
+        self.scroll_content_layout = QVBoxLayout(self.scroll_content_widget)
+        self.scroll_content_layout.setContentsMargins(0, 0, 0, 0) # Tight layout inside scroll
+        self.scroll_area.setWidget(self.scroll_content_widget)
+
         self.display_label = QLabel()
         self.display_label.setWordWrap(True)
         self.display_label.setTextFormat(Qt.TextFormat.RichText)
         self.display_label.linkActivated.connect(self.handle_link_click)
-        self.content_layout.addWidget(self.display_label)
+        self.scroll_content_layout.addWidget(self.display_label)
+        
+        # Add scroll area to main content layout instead of label directly
+        self.content_layout.addWidget(self.scroll_area)
+
+        # Footer Label (Sticky Hotkeys)
+        self.footer_label = QLabel()
+        self.footer_label.setWordWrap(True)
+        self.footer_label.setTextFormat(Qt.TextFormat.RichText)
+        self.footer_label.linkActivated.connect(self.handle_link_click)
+        self.footer_label.setStyleSheet(f"font-family: \"{config.font_family}\"; margin-top: 5px;")
+        
+        # Static footer content
+        buttons_html = (
+            '<div style="text-align: center;">'
+            '<a href="anki" style="color: cyan; text-decoration: none;">[Add to Anki - Alt+A]</a> &nbsp; '
+            '<a href="copy" style="color: cyan; text-decoration: none;">[Copy Text - Alt+C]</a> &nbsp; '
+            '<a href="jisho" style="color: cyan; text-decoration: none;">[Jisho - Alt+J]</a> &nbsp; '
+            '<a href="deepl" style="color: cyan; text-decoration: none;">[DeepL - Alt+D]</a>'
+            '</div>'
+        )
+        self.footer_label.setText(buttons_html)
+        self.content_layout.addWidget(self.footer_label)
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -750,7 +788,7 @@ ruby:hover rt {
         r, g, b = bg_color.red(), bg_color.green(), bg_color.blue()
         a = config.background_opacity
         self.frame.setStyleSheet(f"""
-            QFrame {{
+            #PopupFrame {{
                 background-color: rgba({r}, {g}, {b}, {a});
                 color: {config.color_foreground};
                 border-radius: 8px;
@@ -832,43 +870,85 @@ ruby:hover rt {
             return self._latest_data, self._latest_context
 
     def process_latest_data_loop(self):
-        if not self.is_calibrated:
-            self._calibrate_empirically()
+        try:
+            if not self.is_calibrated:
+                self._calibrate_empirically()
 
-        latest_data, latest_context = self.get_latest_data()
-        if latest_data and (latest_data != self._last_latest_data or latest_context != self._last_latest_context):
-            # update popup content
-            full_html, new_size = self._calculate_content_and_size_char_count(latest_data)
-            self.display_label.setText(full_html)
-            self.setFixedSize(new_size)
-        self._last_latest_data = latest_data
-        self._last_latest_context = latest_context
+            latest_data, latest_context = self.get_latest_data()
+            if latest_data and (latest_data != self._last_latest_data or latest_context != self._last_latest_context):
+                # Check if we should reset scroll (only if word changed)
+                reset_scroll = True
+                if self._last_latest_data and latest_data:
+                    new_entry = latest_data[0]
+                    old_entry = self._last_latest_data[0]
+                    if new_entry.written_form == old_entry.written_form and new_entry.reading == old_entry.reading:
+                        reset_scroll = False
 
-        if self._latest_data and self.input_loop.is_virtual_hotkey_down():
-            self.show_popup()
+                # update popup content
+                full_html, new_size = self._calculate_content_and_size_char_count(latest_data)
+                
+                # If size calc crash returned None
+                if full_html:
+                    self.display_label.setText(full_html)
+                    # self.setFixedSize(new_size) # Should use geometry if we set fixed size on frame?
+                    # new_size is QSize(target_width, final_height)
+                    # We should probably set popup window size too?
+                    self.setFixedSize(new_size)
+                    
+                    if reset_scroll:
+                        self.scroll_area.verticalScrollBar().setValue(0)
             
-            # Check for shortcuts
-            anki_pressed = self.input_loop.is_key_pressed('alt+a')
-            if anki_pressed and not self.anki_shortcut_was_pressed:
-                self.add_to_anki(manual_crop=True)
-            self.anki_shortcut_was_pressed = anki_pressed
+            self._last_latest_data = latest_data
+            self._last_latest_context = latest_context
 
-            copy_pressed = self.input_loop.is_key_pressed('alt+c')
-            if copy_pressed and not self.copy_shortcut_was_pressed:
-                self.copy_to_clipboard()
-            self.copy_shortcut_was_pressed = copy_pressed
+            if self._latest_data and self.input_loop.is_virtual_hotkey_down():
+                self.show_popup()
+                
+                # Check for shortcuts
+                anki_pressed = self.input_loop.is_key_pressed('alt+a')
+                if anki_pressed and not self.anki_shortcut_was_pressed:
+                    self.add_to_anki(manual_crop=True)
+                self.anki_shortcut_was_pressed = anki_pressed
 
-            jisho_pressed = self.input_loop.is_key_pressed('alt+j')
-            if jisho_pressed and not self.jisho_shortcut_was_pressed:
-                self.open_jisho()
-            self.jisho_shortcut_was_pressed = jisho_pressed
+                copy_pressed = self.input_loop.is_key_pressed('alt+c')
+                if copy_pressed and not self.copy_shortcut_was_pressed:
+                    self.copy_to_clipboard()
+                self.copy_shortcut_was_pressed = copy_pressed
 
-            deepl_pressed = self.input_loop.is_key_pressed('alt+d')
-            if deepl_pressed and not self.deepl_shortcut_was_pressed:
-                self.open_deepl()
-            self.deepl_shortcut_was_pressed = deepl_pressed
-        else:
-            self.hide_popup()
+                jisho_pressed = self.input_loop.is_key_pressed('alt+j')
+                if jisho_pressed and not self.jisho_shortcut_was_pressed:
+                    self.open_jisho()
+                self.jisho_shortcut_was_pressed = jisho_pressed
+
+                deepl_pressed = self.input_loop.is_key_pressed('alt+d')
+                if deepl_pressed and not self.deepl_shortcut_was_pressed:
+                    self.open_deepl()
+                self.deepl_shortcut_was_pressed = deepl_pressed
+                
+                # Handle scrolling (manual input hook)
+                scroll_delta = self.input_loop.get_and_reset_scroll_delta()
+                if scroll_delta != 0:
+                    scrollbar = self.scroll_area.verticalScrollBar()
+                    # dy is usually 1 or -1 for one notch. In pixels, maybe 30 or 60?
+                    # Negative dy (scroll down) should increase value? 
+                    # pynput: dy > 0 is up, dy < 0 is down.
+                    # Scrollbar: val=0 is top. Increase to scroll down.
+                    # So negative dy -> positive change in scrollbar value (technically scrollbar "value" is position of top)
+                    # wait, dy=1 usually means "scroll up" (content moves down).
+                    # If I scroll wheel DOWN, dy is -1. I want to see lower content.
+                    # Scrollbar value must INCREASE.
+                    # So subtract dy * step?
+                    # - (-1) * 60 = +60. correct.
+                    step = 60
+                    new_val = scrollbar.value() - int(scroll_delta * step)
+                    scrollbar.setValue(new_val)
+                    
+            else:
+                self.hide_popup()
+                # Clear accumulated scroll when not active to prevent jump on next show
+                self.input_loop.get_and_reset_scroll_delta()
+        except Exception as e:
+            logger.exception("Error in process_latest_data_loop")
 
         # Optional Anki presence indicator on hover
         if config.anki_show_hover_status and latest_data:
@@ -921,29 +1001,63 @@ ruby:hover rt {
                 deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
                 if deconj_str:
                     header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
+            # Group senses by source (preserves order)
+            from itertools import groupby
+            
+            def get_source(s):
+                return s.get('source', 'General')
+                
             def_text_parts_calc = []
             def_text_parts_html = []
-            for idx, sense in enumerate(entry.senses):
-                glosses_str = '; '.join(sense.get('glosses', []))
-                pos_list = sense.get('pos', [])
-                sense_calc = f"({idx + 1})"
-                sense_html = f"<b>({idx + 1})</b> "
-                if config.show_pos and pos_list:
-                    pos_str = f' ({", ".join(pos_list)})'
-                    sense_calc += pos_str
-                    sense_html += f'<span style="color:{config.color_foreground}; opacity:0.7;"><i>{pos_str}</i></span> '
-                sense_calc += glosses_str
-                sense_html += glosses_str
-                def_text_parts_calc.append(sense_calc)
-                def_text_parts_html.append(sense_html)
-
+            
+            # Since Lookup extends senses list, they are already grouped by source roughly key-wise.
+            # We use groupby to cluster them.
+            for source, group in groupby(entry.senses, key=get_source):
+                group_list = list(group)
+                if not group_list: continue
+                
+                # Add Source Header
+                if len(entry.senses) > len(group_list): # Only show header if there are multiple sources or mixing occurred? 
+                    # Actually, always useful to know source if we are supporting yomichan dicts.
+                    # But for single dictionary setup, might be noisy. 
+                    # Let's show it if source is not "General" or if we have multiple groups.
+                    source_header_html = f"<div style='color: #888888; font-size: {config.font_size_definitions - 2}px; margin-top: 6px; margin-bottom: 2px; font-weight: bold;'>{source}</div>"
+                    def_text_parts_html.append(source_header_html)
+                
+                for idx, sense in enumerate(group_list):
+                    glosses_str = '; '.join(sense.get('glosses', []))
+                    pos_list = sense.get('pos', [])
+                    sense_calc = f"({idx + 1})"
+                    sense_html = f"<b>({idx + 1})</b> "
+                    if config.show_pos and pos_list:
+                        pos_str = f' ({", ".join(pos_list)})'
+                        sense_calc += pos_str
+                        sense_html += f'<span style="color:{config.color_foreground}; opacity:0.7;"><i>{pos_str}</i></span> '
+                    sense_calc += glosses_str
+                    sense_html += glosses_str
+                    def_text_parts_calc.append(sense_calc)
+                    def_text_parts_html.append(sense_html)
+                
             if config.compact_mode:
                 separator = "; "
-                full_def_text_html = separator.join(def_text_parts_html)
-                def_ratio = len(separator.join(def_text_parts_calc)) / self.def_chars_per_line
+                # If we have headers (divs) in the list, joining by "; " might look weird for the divs themselves.
+                # But headers are divs. 
+                # We should probably join senses, but inject headers as block elements.
+                # Simplify for now: Just join everything. Browsers/Qt might handle div inside inline context weirdly or force break.
+                # Div forces line break usually.
+                full_def_text_html = "".join(def_text_parts_html) 
+                def_ratio = len("".join(def_text_parts_calc)) / self.def_chars_per_line
                 max_ratio = max(max_ratio, def_ratio)
             else:
                 separator = "<br>"
+                # logic to join senses with BR but keep headers as is
+                # We already appended headers to list as strings. 
+                # Ideally headers shouldn't have BR before them if they are first?
+                # But we join ALL parts.
+                # Senses need BR between them. Header needs no BR after it but BR before it?
+                # My loop structure appended header then senses.
+                # If I join with <br>, I get: Header<br>Sense<br>Sense.
+                # That logic is fine.
                 full_def_text_html = separator.join(def_text_parts_html)
                 for def_text_calc in def_text_parts_calc:
                     def_ratio = len(def_text_calc) / self.def_chars_per_line
@@ -952,33 +1066,49 @@ ruby:hover rt {
             definitions_html_final = f'<div style="font-size:{config.font_size_definitions}px;">{full_def_text_html}</div>'
             all_html_parts.append(f"{header_html}{definitions_html_final}")
 
-        optimal_content_width = self.max_content_width * min(1.0, max_ratio)
-        optimal_content_width = max(optimal_content_width, 200)
-
         full_html = "".join(all_html_parts)
         
-        # Add buttons
-        buttons_html = (
-            '<br><br>'
-            '<a href="anki" style="color: cyan; text-decoration: none;">[Add to Anki - Alt+A]</a> &nbsp; '
-            '<a href="copy" style="color: cyan; text-decoration: none;">[Copy Text - Alt+C]</a> &nbsp; '
-            '<a href="jisho" style="color: cyan; text-decoration: none;">[Jisho - Alt+J]</a> &nbsp; '
-            '<a href="deepl" style="color: cyan; text-decoration: none;">[DeepL - Alt+D]</a>'
-        )
-        full_html += buttons_html
-
-        self.probe_label.setText(full_html)
-
-        final_height = self.probe_label.heightForWidth(int(optimal_content_width))
+        # Add buttons (Removed, moved to sticky footer)
+        # buttons_html = ...
+        # full_html += buttons_html
 
         margins = self.content_layout.contentsMargins()
         border_width = 1
-        horizontal_padding = margins.left() + margins.right() + (border_width * 2)
+        horizontal_padding = margins.left() + margins.right() + (border_width * 2) + 25 # +25 for scrollbar
         vertical_padding = margins.top() + margins.bottom() + (border_width * 2)
 
-        extra_labels_height = self.status_label.sizeHint().height() + self.presence_label.sizeHint().height() + 8
-        final_size = QSize(int(optimal_content_width) + horizontal_padding, final_height + vertical_padding + extra_labels_height)
-        return full_html, final_size
+        # Target width from config
+        target_width = config.max_width
+        
+        # Calculate content height with this width
+        self.probe_label.setText(full_html)
+        self.probe_label.setFixedWidth(target_width - horizontal_padding)
+        content_height = self.probe_label.heightForWidth(target_width - horizontal_padding)
+        
+        # Determine final window height
+        # Include footer height in calculation?
+        footer_height = self.footer_label.sizeHint().height() + 10 # + margin
+        
+        # We want the window height to be content + footer, capped at max_height.
+        # But wait, max_height should include footer.
+        # So scroll area gets (max_height - footer).
+        
+        total_content_height = content_height + vertical_padding + footer_height
+        
+        final_height = min(total_content_height, config.max_height)
+        
+        # Optional: Shrink width if content is very narrow? 
+        # For now, stick to fixed width as requested/implied by "Window Size" config.
+        # But if we want it to look like a tooltip, maybe dynamic width is better.
+        # User asked for "size configuration", which often means "max size".
+        # Let's start with Fixed Width = Max Width for stability, 
+        # as calculating "minimum width" for rich text is hard.
+
+        # Also need to ensure display_label in the real UI has the same width set
+        self.display_label.setFixedWidth(target_width - horizontal_padding)
+        self.footer_label.setFixedWidth(target_width - horizontal_padding)
+
+        return full_html, QSize(target_width, final_height)
 
     def move_to(self, x, y):
         cursor_point = QPoint(x, y)

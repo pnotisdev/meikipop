@@ -43,7 +43,7 @@ class Config:
             },
             'Theme': {
                 'theme_name': 'Nazeka',
-                'font_family': '',
+                'font_family': 'Noto Sans JP',
                 'font_size_definitions': '14',
                 'font_size_header': '18',
                 'compact_mode': 'true',
@@ -56,13 +56,21 @@ class Config:
                 'color_highlight_word': '#88D8FF',
                 'color_highlight_reading': '#90EE90',
                 'background_opacity': '245',
-                'popup_position_mode': 'flip_vertically'
+                'background_opacity': '245',
+                'background_opacity': '245',
+                'popup_position_mode': 'flip_vertically',
+                'max_width': '500',
+                'max_height': '400'
             },
             'Anki': {
                 'deck_name': 'Default',
                 'model_name': 'Meikipop Card',
                 'url': 'http://127.0.0.1:8765',
                 'show_hover_status': 'false'
+            },
+            'Yomitan': {
+                'enabled': 'false',
+                'api_url': 'http://127.0.0.1:19633'
             }
         }
         config.read_dict(defaults)
@@ -104,12 +112,18 @@ class Config:
         self.color_highlight_word = config.get('Theme', 'color_highlight_word')
         self.color_highlight_reading = config.get('Theme', 'color_highlight_reading')
         self.background_opacity = config.getint('Theme', 'background_opacity')
+        self.background_opacity = config.getint('Theme', 'background_opacity')
         self.popup_position_mode = config.get('Theme', 'popup_position_mode')
+        self.max_width = config.getint('Theme', 'max_width', fallback=500)
+        self.max_height = config.getint('Theme', 'max_height', fallback=400)
 
         self.anki_deck_name = config.get('Anki', 'deck_name', fallback='Default')
         self.anki_model_name = config.get('Anki', 'model_name', fallback='Basic')
         self.anki_url = config.get('Anki', 'url', fallback='http://127.0.0.1:8765')
         self.anki_show_hover_status = config.getboolean('Anki', 'show_hover_status', fallback=False)
+
+        self.yomitan_enabled = config.getboolean('Yomitan', 'enabled', fallback=False)
+        self.yomitan_api_url = config.get('Yomitan', 'api_url', fallback='http://127.0.0.1:19633')
 
         self.is_enabled = True
 
@@ -144,13 +158,19 @@ class Config:
             'color_highlight_word': self.color_highlight_word,
             'color_highlight_reading': self.color_highlight_reading,
             'background_opacity': str(self.background_opacity),
-            'popup_position_mode': self.popup_position_mode
+            'popup_position_mode': self.popup_position_mode,
+            'max_width': str(self.max_width),
+            'max_height': str(self.max_height)
         }
         config['Anki'] = {
             'deck_name': self.anki_deck_name,
             'model_name': self.anki_model_name,
             'url': self.anki_url,
             'show_hover_status': str(self.anki_show_hover_status).lower()
+        }
+        config['Yomitan'] = {
+            'enabled': str(self.yomitan_enabled).lower(),
+            'api_url': self.yomitan_api_url
         }
         with open('config.ini', 'w', encoding='utf-8') as configfile:
             config.write(configfile)
