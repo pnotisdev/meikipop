@@ -14,9 +14,11 @@ This is a friendly fork of the original project at https://github.com/rtr46/meik
 - Built-in Anki card creation with region crop and context sentence `Alt+A`.
 - DeepL jump for quick translation checks `Alt+D`.
 - One-tap copy of the recognized text `Alt+C`.
+- `Alt+J`: open the word in Jisho.
 - Duplicate guard: we skip adding a card if the word already exists in the chosen deck/model and show a short popup message.
 - Cropping (images for anki) has been made possible.
 - Audio works now for Anki Deck (Automated from languagepod101.com)
+- Supports monolingual dicts like KTY/kaikki (create root folder: `user_dictionaries` add .zip file in there), other monolingual dictionaries or jp-en dictionaries has not been tested, except for built in JMDict initially supported by Meikipop.
 
 ## Features from original repository by rtr46
 
@@ -47,6 +49,7 @@ Run from source:
    - `Alt+A`: region-select screenshot, then add to Anki. Needs [AnkiConnect](https://ankiweb.net/shared/info/2055492159).
    - `Alt+C`: copy recognized text.
    - `Alt+D`: open the current context in DeepL.
+   - `Alt+J`: open the word in Jisho.
 5. Right-click the tray icon for settings.
 
 ## Anki setup
