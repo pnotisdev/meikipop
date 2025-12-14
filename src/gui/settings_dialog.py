@@ -294,7 +294,7 @@ class SettingsDialog(QDialog):
         config.enabled_dictionaries = enabled_dicts
 
         config.compact_mode = self.compact_check.isChecked()
-        config.show_deconjugation = self.show_deconj_check.isChecked()
+        config.show_deconjugation = self.show_deconjugation.isChecked()
         config.show_pos = self.show_pos_check.isChecked()
         config.show_tags = self.show_tags_check.isChecked()
         config.show_frequency = self.show_frequency_check.isChecked()
