@@ -40,7 +40,10 @@ class Config:
                 'auto_scan_interval_seconds': '0.0',
                 'magpie_compatibility': 'false',
                 'extra_dictionaries_dir': 'user_dictionaries',
-                'enabled_dictionaries': ''
+                'enabled_dictionaries': '',
+                'enable_jmdict': 'true',
+                'max_popup_width': '500',
+                'max_popup_height': '400'
             },
             'Theme': {
                 'theme_name': 'Nazeka',
@@ -91,6 +94,9 @@ class Config:
         self.auto_scan_interval_seconds = config.getfloat('Settings', 'auto_scan_interval_seconds')
         self.magpie_compatibility = config.getboolean('Settings', 'magpie_compatibility')
         self.extra_dictionaries_dir = config.get('Settings', 'extra_dictionaries_dir', fallback='user_dictionaries')
+        self.enable_jmdict = config.getboolean('Settings', 'enable_jmdict', fallback=True)
+        self.max_popup_width = config.getint('Settings', 'max_popup_width', fallback=500)
+        self.max_popup_height = config.getint('Settings', 'max_popup_height', fallback=400)
         
         enabled_dicts_str = config.get('Settings', 'enabled_dictionaries', fallback=None)
         if enabled_dicts_str is None:
@@ -135,7 +141,10 @@ class Config:
             'auto_scan_mode_lookups_without_hotkey': str(self.auto_scan_mode_lookups_without_hotkey).lower(),
             'auto_scan_interval_seconds': str(self.auto_scan_interval_seconds),
             'extra_dictionaries_dir': self.extra_dictionaries_dir,
-            'enabled_dictionaries': ','.join(self.enabled_dictionaries),
+            'enabled_dictionaries': ','.join(self.enabled_dictionaries) if self.enabled_dictionaries else '',
+            'enable_jmdict': str(self.enable_jmdict).lower(),
+            'max_popup_width': str(self.max_popup_width),
+            'max_popup_height': str(self.max_popup_height),
             'magpie_compatibility': str(self.magpie_compatibility).lower()
         }
         config['Theme'] = {

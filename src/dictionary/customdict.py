@@ -111,9 +111,17 @@ class Dictionary:
         try:
             with open(file_path, 'rb') as f:
                 data = pickle.load(f)
-            self.entries = data['entries']
-            self.lookup_kan = data['lookup_kan']
-            self.lookup_kana = data['lookup_kana']
+            
+            if config.enable_jmdict:
+                self.entries = data['entries']
+                self.lookup_kan = data['lookup_kan']
+                self.lookup_kana = data['lookup_kana']
+            else:
+                logger.info("JMDict disabled in settings. Skipping JMDict entries.")
+                self.entries = []
+                self.lookup_kan = defaultdict(list)
+                self.lookup_kana = defaultdict(list)
+
             self.deconjugator_rules = data['deconjugator_rules']
             self.priority_map = data['priority_map']
             self._is_loaded = True

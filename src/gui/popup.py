@@ -785,7 +785,9 @@ ruby:hover rt {
         horizontal_padding = margins.left() + margins.right() + (border_width * 2)
 
         screen = QApplication.primaryScreen()
-        self.max_content_width = (int(screen.geometry().width() * 0.4)) - horizontal_padding
+        # Use configured max width or fallback to screen percentage
+        max_width_setting = getattr(config, 'max_popup_width', 500)
+        self.max_content_width = max_width_setting - horizontal_padding
 
         header_font = QFont(config.font_family)
         header_font.setPixelSize(config.font_size_header)
@@ -943,11 +945,18 @@ ruby:hover rt {
                 def_ratio = len(separator.join(def_text_parts_calc)) / self.def_chars_per_line
                 max_ratio = max(max_ratio, def_ratio)
             else:
+                # Use <br> for non-compact mode, but also allow <br> inside definitions (from structured content)
+                # We join parts with <br>
                 separator = "<br>"
                 full_def_text_html = separator.join(def_text_parts_html)
+                
+                # Calculate ratio based on longest line in definitions
                 for def_text_calc in def_text_parts_calc:
-                    def_ratio = len(def_text_calc) / self.def_chars_per_line
-                    max_ratio = max(max_ratio, def_ratio)
+                    # Split by newlines if any (from structured content)
+                    lines = def_text_calc.split('\n')
+                    for line in lines:
+                        def_ratio = len(line) / self.def_chars_per_line
+                        max_ratio = max(max_ratio, def_ratio)
 
             definitions_html_final = f'<div style="font-size:{config.font_size_definitions}px;">{full_def_text_html}</div>'
             all_html_parts.append(f"{header_html}{definitions_html_final}")
@@ -977,7 +986,12 @@ ruby:hover rt {
         vertical_padding = margins.top() + margins.bottom() + (border_width * 2)
 
         extra_labels_height = self.status_label.sizeHint().height() + self.presence_label.sizeHint().height() + 8
-        final_size = QSize(int(optimal_content_width) + horizontal_padding, final_height + vertical_padding + extra_labels_height)
+        
+        # Enforce max height
+        max_height_setting = getattr(config, 'max_popup_height', 400)
+        final_height_val = min(final_height + vertical_padding + extra_labels_height, max_height_setting)
+        
+        final_size = QSize(int(optimal_content_width) + horizontal_padding, int(final_height_val))
         return full_html, final_size
 
     def move_to(self, x, y):

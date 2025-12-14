@@ -46,7 +46,20 @@ class SettingsDialog(QDialog):
 
         self.setWindowTitle(f"{APP_NAME} Settings")
         self.setWindowIcon(QIcon("icon.ico"))
-        layout = QVBoxLayout(self)
+        
+        # Main layout
+        main_layout = QVBoxLayout(self)
+        
+        # Columns container
+        columns_widget = QWidget()
+        columns_layout = QHBoxLayout(columns_widget)
+        columns_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(columns_widget)
+
+        # --- Column 1: General & Popup Size ---
+        col1_layout = QVBoxLayout()
+        columns_layout.addLayout(col1_layout)
+        
         general_group = QGroupBox("General")
         general_layout = QFormLayout()
         self.hotkey_combo = QComboBox()
@@ -84,33 +97,30 @@ class SettingsDialog(QDialog):
             self.magpie_check.setToolTip("Enable transformations for compatibility with Magpie game scaler.")
             general_layout.addRow("Magpie Compatibility:", self.magpie_check)
         general_group.setLayout(general_layout)
-        layout.addWidget(general_group)
-
-        # Dictionaries Group
-        dict_group = QGroupBox("Dictionaries (Requires Restart)")
-        dict_layout = QVBoxLayout()
-        self.dict_checkboxes = {}
+        col1_layout.addWidget(general_group)
         
-        dict_dir = config.extra_dictionaries_dir
-        if os.path.exists(dict_dir):
-            files = [f for f in os.listdir(dict_dir) if f.lower().endswith('.zip')]
-            if not files:
-                dict_layout.addWidget(QLabel("No dictionaries found in user_dictionaries."))
-            else:
-                for f in files:
-                    chk = QCheckBox(f)
-                    # If None (default), check all. Else check if in list.
-                    if config.enabled_dictionaries is None or f in config.enabled_dictionaries:
-                        chk.setChecked(True)
-                    self.dict_checkboxes[f] = chk
-                    dict_layout.addWidget(chk)
-        else:
-            dict_layout.addWidget(QLabel(f"Directory not found: {dict_dir}"))
-            
-        dict_group.setLayout(dict_layout)
-        layout.addWidget(dict_group)
+        # Popup Size Group
+        size_group = QGroupBox("Popup Size")
+        size_layout = QFormLayout()
+        self.max_width_spin = QSpinBox()
+        self.max_width_spin.setRange(200, 2000)
+        self.max_width_spin.setValue(config.max_popup_width)
+        size_layout.addRow("Max Width:", self.max_width_spin)
+        
+        self.max_height_spin = QSpinBox()
+        self.max_height_spin.setRange(200, 2000)
+        self.max_height_spin.setValue(config.max_popup_height)
+        size_layout.addRow("Max Height:", self.max_height_spin)
+        size_group.setLayout(size_layout)
+        col1_layout.addWidget(size_group)
+        
+        col1_layout.addStretch() # Push to top
 
-        theme_group = QGroupBox("Popup")
+        # --- Column 2: Popup Theme ---
+        col2_layout = QVBoxLayout()
+        columns_layout.addLayout(col2_layout)
+
+        theme_group = QGroupBox("Popup Appearance")
         theme_layout = QFormLayout()
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(THEMES.keys())
@@ -167,9 +177,9 @@ class SettingsDialog(QDialog):
         self.compact_check = QCheckBox()
         self.compact_check.setChecked(config.compact_mode)
         theme_layout.addRow("  Compact Mode:", self.compact_check)
-        self.show_deconj_check = QCheckBox()
-        self.show_deconj_check.setChecked(config.show_deconjugation)
-        theme_layout.addRow("  Show Deconjugation:", self.show_deconj_check)
+        self.show_deconjugation = QCheckBox()
+        self.show_deconjugation.setChecked(config.show_deconjugation)
+        theme_layout.addRow("  Show Deconjugation:", self.show_deconjugation)
         self.show_pos_check = QCheckBox()
         self.show_pos_check.setChecked(config.show_pos)
         theme_layout.addRow("  Show Part of Speech:", self.show_pos_check)
@@ -184,11 +194,48 @@ class SettingsDialog(QDialog):
         self.anki_hover_status_check.setToolTip("Show a small indicator when hovering if the word is already in your Anki deck.")
         theme_layout.addRow("  Show Anki Hover Status:", self.anki_hover_status_check)
         theme_group.setLayout(theme_layout)
-        layout.addWidget(theme_group)
+        col2_layout.addWidget(theme_group)
+        col2_layout.addStretch()
+
+        # --- Column 3: Dictionaries ---
+        col3_layout = QVBoxLayout()
+        columns_layout.addLayout(col3_layout)
+
+        # Dictionaries Group
+        dict_group = QGroupBox("Dictionaries (Requires Restart)")
+        dict_layout = QVBoxLayout()
+        
+        self.enable_jmdict_check = QCheckBox("Enable JMDict (Built-in)")
+        self.enable_jmdict_check.setChecked(config.enable_jmdict)
+        dict_layout.addWidget(self.enable_jmdict_check)
+        
+        dict_layout.addWidget(QLabel("User Dictionaries:"))
+        self.dict_checkboxes = {}
+        
+        dict_dir = config.extra_dictionaries_dir
+        if os.path.exists(dict_dir):
+            files = [f for f in os.listdir(dict_dir) if f.lower().endswith('.zip')]
+            if not files:
+                dict_layout.addWidget(QLabel("No dictionaries found in user_dictionaries."))
+            else:
+                for f in files:
+                    chk = QCheckBox(f)
+                    # If None (default), check all. Else check if in list.
+                    if config.enabled_dictionaries is None or f in config.enabled_dictionaries:
+                        chk.setChecked(True)
+                    self.dict_checkboxes[f] = chk
+                    dict_layout.addWidget(chk)
+        else:
+            dict_layout.addWidget(QLabel(f"Directory not found: {dict_dir}"))
+            
+        dict_group.setLayout(dict_layout)
+        col3_layout.addWidget(dict_group)
+        col3_layout.addStretch()
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.save_and_accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        main_layout.addWidget(buttons)
         self._update_color_buttons()
 
     def _mark_as_custom(self):
@@ -234,6 +281,10 @@ class SettingsDialog(QDialog):
         config.auto_scan_mode_lookups_without_hotkey = self.auto_scan_no_hotkey_check.isChecked()
         if IS_WINDOWS:
             config.magpie_compatibility = self.magpie_check.isChecked()
+
+        config.enable_jmdict = self.enable_jmdict_check.isChecked()
+        config.max_popup_width = self.max_width_spin.value()
+        config.max_popup_height = self.max_height_spin.value()
 
         # Save enabled dictionaries
         enabled_dicts = []
