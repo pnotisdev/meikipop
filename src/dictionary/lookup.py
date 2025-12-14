@@ -22,6 +22,7 @@ class DictionaryEntry:
     reading: str
     senses: list
     tags: Set[str]
+    frequency_tags: Set[str]
     deconjugation_process: tuple
     priority: float = 0.0
 
@@ -181,6 +182,16 @@ class Lookup(threading.Thread):
                 tags.add(misc.strip('&;'))
         return tags
 
+    def _get_frequency_tags(self, entry: dict) -> Set[str]:
+        tags = set()
+        for k_ele in entry.get('raw_k_ele', []):
+            for pri in k_ele.get('pri', []):
+                tags.add(pri)
+        for r_ele in entry.get('raw_r_ele', []):
+            for pri in r_ele.get('pri', []):
+                tags.add(pri)
+        return tags
+
     def _prefers_kana(self, misc_tags: Set[str]) -> bool:
         return 'uk' in misc_tags or 'ek' in misc_tags
 
@@ -249,6 +260,7 @@ class Lookup(threading.Thread):
                     "written_form": written_form,
                     "reading": reading_to_display, "senses": list(entry_data['senses']),
                     "tags": self._get_misc_tags(entry_data),
+                    "frequency_tags": self._get_frequency_tags(entry_data),
                     "deconjugation_process": form.process,
                     "priority": priority,
                     "match_len": match_len
@@ -257,6 +269,7 @@ class Lookup(threading.Thread):
                 current_entry = merged_entries[merge_key]
                 current_entry['senses'].extend(entry_data['senses'])
                 current_entry['tags'].update(self._get_misc_tags(entry_data))
+                current_entry['frequency_tags'].update(self._get_frequency_tags(entry_data))
                 if priority > current_entry['priority']:
                     current_entry['priority'] = priority
                     current_entry['id'] = entry_data['id']

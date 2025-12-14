@@ -903,6 +903,8 @@ ruby:hover rt {
             if entry.reading: header_text_calc += f" [{entry.reading}]"
             if config.show_tags and entry.tags:
                 header_text_calc += f' [{", ".join(sorted(list(entry.tags)))}]'
+            if config.show_frequency and entry.frequency_tags:
+                header_text_calc += f' [{", ".join(sorted(list(entry.frequency_tags)))}]'
             header_ratio = len(header_text_calc) / self.header_chars_per_line
             max_ratio = max(max_ratio, header_ratio)
 
@@ -912,6 +914,9 @@ ruby:hover rt {
             if config.show_tags and entry.tags:
                 tags_str = ", ".join(sorted(list(entry.tags)))
                 header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.7;">[{tags_str}]</span>'
+            if config.show_frequency and entry.frequency_tags:
+                freq_str = ", ".join(sorted(list(entry.frequency_tags)))
+                header_html += f' <span style="color:{config.color_highlight_word}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">[{freq_str}]</span>'
             if entry.deconjugation_process and config.show_deconjugation:
                 deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
                 if deconj_str:
