@@ -38,7 +38,8 @@ class Config:
                 'auto_scan_mode': 'false',
                 'auto_scan_mode_lookups_without_hotkey': 'true',
                 'auto_scan_interval_seconds': '0.0',
-                'magpie_compatibility': 'false'
+                'magpie_compatibility': 'false',
+                'extra_dictionaries_dir': 'user_dictionaries'
             },
             'Theme': {
                 'theme_name': 'Nazeka',
@@ -88,6 +89,7 @@ class Config:
                                                                        'auto_scan_mode_lookups_without_hotkey')
         self.auto_scan_interval_seconds = config.getfloat('Settings', 'auto_scan_interval_seconds')
         self.magpie_compatibility = config.getboolean('Settings', 'magpie_compatibility')
+        self.extra_dictionaries_dir = config.get('Settings', 'extra_dictionaries_dir', fallback='user_dictionaries')
         self.theme_name = config.get('Theme', 'theme_name')
         self.font_family = config.get('Theme', 'font_family')
         self.font_size_definitions = config.getint('Theme', 'font_size_definitions')
@@ -124,6 +126,7 @@ class Config:
             'auto_scan_mode': str(self.auto_scan_mode).lower(),
             'auto_scan_mode_lookups_without_hotkey': str(self.auto_scan_mode_lookups_without_hotkey).lower(),
             'auto_scan_interval_seconds': str(self.auto_scan_interval_seconds),
+            'extra_dictionaries_dir': self.extra_dictionaries_dir,
             'magpie_compatibility': str(self.magpie_compatibility).lower()
         }
         config['Theme'] = {

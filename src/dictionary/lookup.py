@@ -41,6 +41,11 @@ class Lookup(threading.Thread):
 
         if not self.dictionary.load_dictionary('jmdict_enhanced.pkl'):
             raise RuntimeError("Failed to load dictionary.")
+        
+        # Load extra dictionaries (Yomichan/Yomitan)
+        if config.extra_dictionaries_dir:
+            self.dictionary.import_yomichan_directory(config.extra_dictionaries_dir)
+
         self.deconjugator = Deconjugator(self.dictionary.deconjugator_rules)
 
         self.CACHE_SIZE = 500

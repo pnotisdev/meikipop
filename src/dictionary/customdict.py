@@ -3,9 +3,11 @@ import json
 import logging
 import pickle
 import time
+import os
 from collections import defaultdict
 
 from src.config.config import IS_WINDOWS
+from src.dictionary.yomichan import parse_yomichan_zip
 
 logger = logging.getLogger(__name__) # Get the logger
 
@@ -55,6 +57,37 @@ class Dictionary:
             for item in priority_data:
                 key = (item[0], item[1])
                 self.priority_map[key] = item[2]
+
+    def import_yomichan_directory(self, directory_path: str):
+        """Imports all Yomichan/Yomitan dictionaries (.zip) from a directory."""
+        if not os.path.exists(directory_path):
+            logger.warning(f"Yomichan dictionary directory not found: {directory_path}")
+            return
+
+        logger.info(f"Scanning for Yomichan dictionaries in: {directory_path}")
+        for filename in os.listdir(directory_path):
+            if filename.lower().endswith('.zip'):
+                full_path = os.path.join(directory_path, filename)
+                self.import_yomichan_zip(full_path)
+
+    def import_yomichan_zip(self, zip_path: str):
+        """Imports a single Yomichan/Yomitan dictionary ZIP."""
+        new_entries = parse_yomichan_zip(zip_path)
+        if not new_entries:
+            return
+
+        start_index = len(self.entries)
+        self.entries.extend(new_entries)
+        
+        # Update lookups
+        for i, entry in enumerate(new_entries):
+            real_index = start_index + i
+            for keb in entry['kebs']:
+                self.lookup_kan[keb].append(real_index)
+            for reb in entry['rebs']:
+                self.lookup_kana[reb].append(real_index)
+        
+        logger.info(f"Imported {len(new_entries)} entries from {os.path.basename(zip_path)}")
 
     def save_dictionary(self, file_path: str):
         data_to_save = {'entries': self.entries, 'lookup_kan': self.lookup_kan, 'lookup_kana': self.lookup_kana, 'deconjugator_rules': self.deconjugator_rules, 'priority_map': self.priority_map}
