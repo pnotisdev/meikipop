@@ -1,4 +1,5 @@
 # src/gui/settings_dialog.py
+import os
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (QWidget, QDialog, QFormLayout, QComboBox,
@@ -84,6 +85,31 @@ class SettingsDialog(QDialog):
             general_layout.addRow("Magpie Compatibility:", self.magpie_check)
         general_group.setLayout(general_layout)
         layout.addWidget(general_group)
+
+        # Dictionaries Group
+        dict_group = QGroupBox("Dictionaries (Requires Restart)")
+        dict_layout = QVBoxLayout()
+        self.dict_checkboxes = {}
+        
+        dict_dir = config.extra_dictionaries_dir
+        if os.path.exists(dict_dir):
+            files = [f for f in os.listdir(dict_dir) if f.lower().endswith('.zip')]
+            if not files:
+                dict_layout.addWidget(QLabel("No dictionaries found in user_dictionaries."))
+            else:
+                for f in files:
+                    chk = QCheckBox(f)
+                    # If None (default), check all. Else check if in list.
+                    if config.enabled_dictionaries is None or f in config.enabled_dictionaries:
+                        chk.setChecked(True)
+                    self.dict_checkboxes[f] = chk
+                    dict_layout.addWidget(chk)
+        else:
+            dict_layout.addWidget(QLabel(f"Directory not found: {dict_dir}"))
+            
+        dict_group.setLayout(dict_layout)
+        layout.addWidget(dict_group)
+
         theme_group = QGroupBox("Popup")
         theme_layout = QFormLayout()
         self.theme_combo = QComboBox()
@@ -208,6 +234,14 @@ class SettingsDialog(QDialog):
         config.auto_scan_mode_lookups_without_hotkey = self.auto_scan_no_hotkey_check.isChecked()
         if IS_WINDOWS:
             config.magpie_compatibility = self.magpie_check.isChecked()
+
+        # Save enabled dictionaries
+        enabled_dicts = []
+        for filename, chk in self.dict_checkboxes.items():
+            if chk.isChecked():
+                enabled_dicts.append(filename)
+        config.enabled_dictionaries = enabled_dicts
+
         config.compact_mode = self.compact_check.isChecked()
         config.show_deconjugation = self.show_deconj_check.isChecked()
         config.show_pos = self.show_pos_check.isChecked()

@@ -6,7 +6,7 @@ import time
 import os
 from collections import defaultdict
 
-from src.config.config import IS_WINDOWS
+from src.config.config import IS_WINDOWS, config
 from src.dictionary.yomichan import parse_yomichan_zip
 
 logger = logging.getLogger(__name__) # Get the logger
@@ -65,10 +65,19 @@ class Dictionary:
             return
 
         logger.info(f"Scanning for Yomichan dictionaries in: {directory_path}")
-        for filename in os.listdir(directory_path):
-            if filename.lower().endswith('.zip'):
-                full_path = os.path.join(directory_path, filename)
-                self.import_yomichan_zip(full_path)
+        
+        available_files = [f for f in os.listdir(directory_path) if f.lower().endswith('.zip')]
+        
+        if config.enabled_dictionaries is None:
+            # Default: load all
+            files_to_load = available_files
+        else:
+            # Load only enabled ones
+            files_to_load = [f for f in available_files if f in config.enabled_dictionaries]
+
+        for filename in files_to_load:
+            full_path = os.path.join(directory_path, filename)
+            self.import_yomichan_zip(full_path)
 
     def import_yomichan_zip(self, zip_path: str):
         """Imports a single Yomichan/Yomitan dictionary ZIP."""
