@@ -6,10 +6,12 @@ import datetime
 import hashlib
 from typing import List, Optional
 
-from PyQt6.QtCore import QTimer, QPoint, QSize
+from PyQt6.QtCore import QTimer, QPoint, QSize, QUrl
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QFontInfo
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame, QApplication
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+import urllib.parse
 
 from src.config.config import config, MAX_DICT_ENTRIES, IS_MACOS
 from src.dictionary.lookup import DictionaryEntry
@@ -40,6 +42,7 @@ class Popup(QWidget):
         self.copy_shortcut_was_pressed = False
         self.deepl_shortcut_was_pressed = False
         self.jisho_shortcut_was_pressed = False
+        self.audio_shortcut_was_pressed = False
         self.last_manual_crop_rect = None  # remember last user crop so Alt+A can reuse it
 
         self.shared_state = shared_state
@@ -98,6 +101,12 @@ class Popup(QWidget):
 
         self._last_presence_key = None
 
+        # Audio player setup
+        self.player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.player.setAudioOutput(self.audio_output)
+        self.audio_output.setVolume(1.0)
+
         self.hide()
 
     def handle_link_click(self, url):
@@ -109,6 +118,8 @@ class Popup(QWidget):
             self.open_deepl()
         elif url == "jisho":
             self.open_jisho()
+        elif url == "audio":
+            self.play_audio()
 
     def add_to_anki(self, manual_crop=True):
         logger.info(f"Add to Anki clicked (manual_crop={manual_crop})")
@@ -262,6 +273,27 @@ class Popup(QWidget):
         encoded_term = urllib.parse.quote(term)
         url = f"https://jisho.org/search/{encoded_term}"
         webbrowser.open(url)
+
+    def play_audio(self):
+        latest_data, _ = self.get_latest_data()
+        if not latest_data:
+            return
+
+        entry = latest_data[0]
+        word = entry.written_form or ""
+        reading = entry.reading or ""
+        
+        if not word and not reading:
+            return
+
+        safe_word = urllib.parse.quote(word)
+        safe_reading = urllib.parse.quote(reading)
+        
+        url_str = f"https://assets.languagepod101.com/dictionary/japanese/audiomp3.php?kanji={safe_word}&kana={safe_reading}"
+        logger.info(f"Playing audio from: {url_str}")
+        
+        self.player.setSource(QUrl(url_str))
+        self.player.play()
 
     def open_deepl(self):
         if not self._latest_context:
@@ -753,8 +785,8 @@ ruby:hover rt {
             QFrame {{
                 background-color: rgba({r}, {g}, {b}, {a});
                 color: {config.color_foreground};
-                border-radius: 8px;
-                border: 1px solid #555;
+                border-radius: {config.border_radius}px;
+                border: {config.border_width}px solid {config.border_color};
             }}
             QLabel {{
                 background-color: transparent;
@@ -869,6 +901,11 @@ ruby:hover rt {
             if deepl_pressed and not self.deepl_shortcut_was_pressed:
                 self.open_deepl()
             self.deepl_shortcut_was_pressed = deepl_pressed
+
+            audio_pressed = self.input_loop.is_key_pressed('alt+p')
+            if audio_pressed and not self.audio_shortcut_was_pressed:
+                self.play_audio()
+            self.audio_shortcut_was_pressed = audio_pressed
         else:
             self.hide_popup()
 
@@ -969,6 +1006,7 @@ ruby:hover rt {
         # Add buttons
         buttons_html = (
             '<br><br>'
+            '<a href="audio" style="color: cyan; text-decoration: none;">[Play Audio - Alt+P]</a> &nbsp; '
             '<a href="anki" style="color: cyan; text-decoration: none;">[Add to Anki - Alt+A]</a> &nbsp; '
             '<a href="copy" style="color: cyan; text-decoration: none;">[Copy Text - Alt+C]</a> &nbsp; '
             '<a href="jisho" style="color: cyan; text-decoration: none;">[Jisho - Alt+J]</a> &nbsp; '

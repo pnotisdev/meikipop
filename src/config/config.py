@@ -60,7 +60,10 @@ class Config:
                 'color_highlight_word': '#88D8FF',
                 'color_highlight_reading': '#90EE90',
                 'background_opacity': '245',
-                'popup_position_mode': 'flip_vertically'
+                'popup_position_mode': 'flip_vertically',
+                'border_color': '#555555',
+                'border_radius': '8',
+                'border_width': '1'
             },
             'Anki': {
                 'deck_name': 'Default',
@@ -119,6 +122,9 @@ class Config:
         self.color_highlight_reading = config.get('Theme', 'color_highlight_reading')
         self.background_opacity = config.getint('Theme', 'background_opacity')
         self.popup_position_mode = config.get('Theme', 'popup_position_mode')
+        self.border_color = config.get('Theme', 'border_color', fallback='#555555')
+        self.border_radius = config.getint('Theme', 'border_radius', fallback=8)
+        self.border_width = config.getint('Theme', 'border_width', fallback=1)
 
         self.anki_deck_name = config.get('Anki', 'deck_name', fallback='Default')
         self.anki_model_name = config.get('Anki', 'model_name', fallback='Basic')
@@ -160,6 +166,9 @@ class Config:
             'color_background': self.color_background,
             'color_foreground': self.color_foreground,
             'color_highlight_word': self.color_highlight_word,
+            'border_color': self.border_color,
+            'border_radius': str(self.border_radius),
+            'border_width': str(self.border_width),
             'color_highlight_reading': self.color_highlight_reading,
             'background_opacity': str(self.background_opacity),
             'popup_position_mode': self.popup_position_mode

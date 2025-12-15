@@ -16,21 +16,31 @@ THEMES = {
         "color_background": "#2E2E2E", "color_foreground": "#F0F0F0",
         "color_highlight_word": "#88D8FF", "color_highlight_reading": "#90EE90",
         "background_opacity": 245,
+        "border_color": "#555555", "border_radius": 8, "border_width": 1
     },
     "Celestial Indigo": {
         "color_background": "#281E50", "color_foreground": "#EAEFF5",
         "color_highlight_word": "#D4C58A", "color_highlight_reading": "#B5A2D4",
         "background_opacity": 245,
+        "border_color": "#555555", "border_radius": 8, "border_width": 1
     },
     "Neutral Slate": {
         "color_background": "#5D5C5B", "color_foreground": "#EFEBE8",
         "color_highlight_word": "#A3B8A3", "color_highlight_reading": "#A3B8A3",
         "background_opacity": 245,
+        "border_color": "#555555", "border_radius": 8, "border_width": 1
     },
     "Academic": {
         "color_background": "#FDFBF7", "color_foreground": "#212121",
         "color_highlight_word": "#8C2121", "color_highlight_reading": "#005A9C",
         "background_opacity": 245,
+        "border_color": "#CCCCCC", "border_radius": 4, "border_width": 1
+    },
+    "Dark Mode": {
+        "color_background": "#121212", "color_foreground": "#E0E0E0",
+        "color_highlight_word": "#BB86FC", "color_highlight_reading": "#03DAC6",
+        "background_opacity": 250,
+        "border_color": "#333333", "border_radius": 8, "border_width": 1
     },
     "Custom": {}
 }
@@ -143,13 +153,28 @@ class SettingsDialog(QDialog):
         theme_layout.addRow(QLabel("Customize Colors:"))
         self.color_widgets = {}
         color_settings_map = {"Background": "color_background", "Foreground": "color_foreground",
-                              "Highlight Word": "color_highlight_word", "Highlight Reading": "color_highlight_reading"}
+                              "Highlight Word": "color_highlight_word", "Highlight Reading": "color_highlight_reading",
+                              "Border": "border_color"}
         for name, key in color_settings_map.items():
             btn = QPushButton(getattr(config, key))
             btn.clicked.connect(lambda _, k=key, b=btn: self.pick_color(k, b))
             self.color_widgets[key] = btn
             theme_layout.addRow(f"  {name}:", btn)
+        
         theme_layout.addRow(QLabel("Customize Layout:"))
+        
+        self.border_radius_spin = QSpinBox()
+        self.border_radius_spin.setRange(0, 50)
+        self.border_radius_spin.setValue(config.border_radius)
+        self.border_radius_spin.valueChanged.connect(self._mark_as_custom)
+        theme_layout.addRow("  Border Radius:", self.border_radius_spin)
+
+        self.border_width_spin = QSpinBox()
+        self.border_width_spin.setRange(0, 10)
+        self.border_width_spin.setValue(config.border_width)
+        self.border_width_spin.valueChanged.connect(self._mark_as_custom)
+        theme_layout.addRow("  Border Width:", self.border_width_spin)
+
         self.popup_position_combo = QComboBox()
         self.popup_position_combo.addItems(["Flip Both", "Flip Vertically", "Flip Horizontally", "Visual Novel Mode"])
         self.popup_mode_map = {
@@ -249,6 +274,8 @@ class SettingsDialog(QDialog):
                 setattr(config, key, value)
             self._update_color_buttons()
             self.opacity_slider.setValue(config.background_opacity)
+            self.border_radius_spin.setValue(config.border_radius)
+            self.border_width_spin.setValue(config.border_width)
 
     def _update_color_buttons(self):
         for key, btn in self.color_widgets.items():
@@ -303,6 +330,8 @@ class SettingsDialog(QDialog):
         config.popup_position_mode = self.popup_mode_map.get(selected_friendly_name, "flip_vertically")
         config.theme_name = self.theme_combo.currentText()
         config.background_opacity = self.opacity_slider.value()
+        config.border_radius = self.border_radius_spin.value()
+        config.border_width = self.border_width_spin.value()
         config.font_family = self.font_family_edit.text()
         config.font_size_header = self.font_size_header_spin.value()
         config.font_size_definitions = self.font_size_def_spin.value()
