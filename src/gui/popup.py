@@ -919,65 +919,103 @@ ruby:hover rt {
         self.move_to(mouse_pos.x(), mouse_pos.y())
 
     def _generate_entry_html(self, entry: DictionaryEntry, index: int) -> tuple[str, float]:
-        header_text_calc = entry.written_form
-        if entry.reading: header_text_calc += f" [{entry.reading}]"
-        if config.show_tags and entry.tags:
-            header_text_calc += f' [{", ".join(sorted(list(entry.tags)))}]'
-        if config.show_frequency and entry.frequency_tags:
-            header_text_calc += f' [{", ".join(sorted(list(entry.frequency_tags)))}]'
-        header_ratio = len(header_text_calc) / self.header_chars_per_line
-        max_ratio = header_ratio
+        # Colors
+        c_word = config.color_highlight_word
+        c_read = config.color_highlight_reading
+        c_fg = config.color_foreground
+        
+        # Font sizes
+        fs_head = config.font_size_header
+        fs_def = config.font_size_definitions
+        
+        # --- Header ---
+        header_html = f'<div style="margin-bottom: 2px;">'
+        header_html += f'<span style="font-size:{fs_head}px; font-weight:bold; color:{c_word};">{entry.written_form}</span>'
+        
+        if entry.reading:
+            header_html += f'&nbsp;&nbsp;<span style="font-size:{fs_head}px; color:{c_read};">[{entry.reading}]</span>'
+        header_html += "</div>"
+        
+        # --- Tags (Frequency, POS, Misc, Deconjugation) ---
+        tags_html = ""
+        all_tags = []
+        
+        # Helper for badges
+        def make_badge(text, bg_alpha=0.15, color=c_fg):
+            # Note: QLabel CSS support for padding/border-radius on spans is limited.
+            # We use a small font and brackets/colors to simulate badges if CSS fails,
+            # but let's try inline styles that might work or fallback to simple text.
+            return f'<span style="color:{color}; font-size:{fs_def-2}px;">[{text}]</span>'
 
-        # --- HTML construction ---
-        header_html = f'<span style="color: {config.color_highlight_word}; font-size:{config.font_size_header}px;">{entry.written_form}</span>'
-        if entry.reading: header_html += f' <span style="color: {config.color_highlight_reading}; font-size:{config.font_size_header - 2}px;">[{entry.reading}]</span>'
-        if config.show_tags and entry.tags:
-            tags_str = ", ".join(sorted(list(entry.tags)))
-            header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.7;">[{tags_str}]</span>'
         if config.show_frequency and entry.frequency_tags:
-            freq_str = ", ".join(sorted(list(entry.frequency_tags)))
-            header_html += f' <span style="color:{config.color_highlight_word}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">[{freq_str}]</span>'
+            for tag in sorted(list(entry.frequency_tags)):
+                all_tags.append(make_badge(tag, color=c_word))
+
+        if config.show_tags and entry.tags:
+            for tag in sorted(list(entry.tags)):
+                all_tags.append(make_badge(tag, color=c_fg))
+                
         if entry.deconjugation_process and config.show_deconjugation:
-            deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
-            if deconj_str:
-                header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
+             deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
+             if deconj_str:
+                 all_tags.append(f'<span style="color:{c_fg}; font-size:{fs_def-2}px; opacity:0.7;">({deconj_str})</span>')
+
+        if all_tags:
+            tags_html = f'<div style="margin-bottom: 4px;">{" ".join(all_tags)}</div>'
+
+        # --- Definitions ---
+        defs_html = f'<div style="font-size:{fs_def}px;">'
+        
         def_text_parts_calc = []
-        def_text_parts_html = []
-        for idx, sense in enumerate(entry.senses):
-            glosses_str = '; '.join(sense.get('glosses', []))
-            pos_list = sense.get('pos', [])
-            sense_calc = f"({idx + 1})"
-            sense_html = f"<b>({idx + 1})</b> "
-            if config.show_pos and pos_list:
-                pos_str = f' ({", ".join(pos_list)})'
-                sense_calc += pos_str
-                sense_html += f'<span style="color:{config.color_foreground}; opacity:0.7;"><i>{pos_str}</i></span> '
-            sense_calc += glosses_str
-            sense_html += glosses_str
-            def_text_parts_calc.append(sense_calc)
-            def_text_parts_html.append(sense_html)
-
+        
         if config.compact_mode:
-            separator = "; "
-            full_def_text_html = separator.join(def_text_parts_html)
-            def_ratio = len(separator.join(def_text_parts_calc)) / self.def_chars_per_line
-            max_ratio = max(max_ratio, def_ratio)
+             def_parts = []
+             for idx, sense in enumerate(entry.senses):
+                 glosses = "; ".join(sense.get('glosses', []))
+                 pos_str = ""
+                 if config.show_pos and sense.get('pos'):
+                     pos_str = f"<i>({', '.join(sense['pos'])})</i> "
+                 
+                 entry_str = f"<b>{idx+1}.</b> {pos_str}{glosses}"
+                 def_parts.append(entry_str)
+                 def_text_parts_calc.append(entry_str)
+                 
+             defs_html += " <span style='color:#666;'>|</span> ".join(def_parts)
         else:
-            # Use <br> for non-compact mode, but also allow <br> inside definitions (from structured content)
-            # We join parts with <br>
-            separator = "<br>"
-            full_def_text_html = separator.join(def_text_parts_html)
-            
-            # Calculate ratio based on longest line in definitions
-            for def_text_calc in def_text_parts_calc:
-                # Split by newlines if any (from structured content)
-                lines = def_text_calc.split('\n')
-                for line in lines:
-                    def_ratio = len(line) / self.def_chars_per_line
-                    max_ratio = max(max_ratio, def_ratio)
+             # List style for non-compact
+             for idx, sense in enumerate(entry.senses):
+                 glosses = "; ".join(sense.get('glosses', []))
+                 pos_str = ""
+                 if config.show_pos and sense.get('pos'):
+                     pos_str = f"<span style='color:{c_fg}; opacity:0.7; font-style:italic;'>({', '.join(sense['pos'])})</span> "
+                 
+                 entry_str = f'<div style="margin-bottom: 2px;"><b>{idx+1}.</b> {pos_str}{glosses}</div>'
+                 defs_html += entry_str
+                 def_text_parts_calc.append(glosses) # just glosses for width calc
+        
+        defs_html += "</div>"
+        
+        full_html = f"{header_html}{tags_html}{defs_html}"
 
-        definitions_html_final = f'<div style="font-size:{config.font_size_definitions}px;">{full_def_text_html}</div>'
-        return f"{header_html}{definitions_html_final}", max_ratio
+        # --- Ratio Calculation for Width ---
+        # Estimate width requirements
+        header_len = len(entry.written_form) + (len(entry.reading) if entry.reading else 0) + 4
+        header_ratio = header_len / self.header_chars_per_line
+        
+        max_ratio = header_ratio
+        
+        # Check definitions width
+        for text in def_text_parts_calc:
+            # Strip html tags for calc (rough approximation)
+            clean_text = text
+            if "<" in text:
+                import re
+                clean_text = re.sub(r'<[^>]+>', '', text)
+            
+            def_ratio = len(clean_text) / self.def_chars_per_line
+            max_ratio = max(max_ratio, def_ratio)
+
+        return full_html, max_ratio
 
     def _update_popup_content(self, entries: Optional[List[DictionaryEntry]]):
         if not self.is_calibrated or not entries:
@@ -998,7 +1036,7 @@ ruby:hover rt {
             max_ratio_left = 0.0
             for i, entry in enumerate(left_entries):
                 html, ratio = self._generate_entry_html(entry, i)
-                if i > 0: left_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+                if i > 0: left_html_parts.append('<hr style="margin-top: 4px; margin-bottom: 4px; border: 0; border-top: 1px solid #555;">')
                 left_html_parts.append(html)
                 max_ratio_left = max(max_ratio_left, ratio)
 
@@ -1006,7 +1044,7 @@ ruby:hover rt {
             max_ratio_right = 0.0
             for i, entry in enumerate(right_entries):
                 html, ratio = self._generate_entry_html(entry, i)
-                if i > 0: right_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+                if i > 0: right_html_parts.append('<hr style="margin-top: 4px; margin-bottom: 4px; border: 0; border-top: 1px solid #555;">')
                 right_html_parts.append(html)
                 max_ratio_right = max(max_ratio_right, ratio)
 
@@ -1021,37 +1059,41 @@ ruby:hover rt {
             max_ratio = max(max_ratio_left, max_ratio_right)
             
             # For 2 columns, we allow wider content.
-            # We assume max_content_width is for a single column.
             optimal_col_width = self.max_content_width * min(1.0, max_ratio)
-            optimal_content_width = (optimal_col_width * 2) + 40 # padding/gap
+            optimal_content_width = (optimal_col_width * 2) + 40 
             
         else:
             all_html_parts = []
             for i, entry in enumerate(entries_to_show):
                 html, ratio = self._generate_entry_html(entry, i)
-                if i > 0: all_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+                if i > 0: all_html_parts.append('<hr style="margin-top: 4px; margin-bottom: 4px; border: 0; border-top: 1px solid #555;">')
                 all_html_parts.append(html)
                 max_ratio = max(max_ratio, ratio)
             
             full_html = "".join(all_html_parts)
             optimal_content_width = self.max_content_width * min(1.0, max_ratio)
 
-        optimal_content_width = max(optimal_content_width, 200)
+        optimal_content_width = max(optimal_content_width, 320) # Min width to fit shortcuts
 
-        # Add buttons
+        # Add buttons (Icons + Shortcuts Legend)
+        # Since the popup moves with the mouse, these are visual indicators of the available hotkeys.
         buttons_html = (
-            '<br><br>'
-            '<a href="audio" style="color: cyan; text-decoration: none;">[Play Audio - Alt+P]</a> &nbsp; '
-            '<a href="anki" style="color: cyan; text-decoration: none;">[Add to Anki - Alt+A]</a> &nbsp; '
-            '<a href="copy" style="color: cyan; text-decoration: none;">[Copy Text - Alt+C]</a> &nbsp; '
-            '<a href="jisho" style="color: cyan; text-decoration: none;">[Jisho - Alt+J]</a> &nbsp; '
-            '<a href="deepl" style="color: cyan; text-decoration: none;">[DeepL - Alt+D]</a>'
+            '<div style="margin-top: 8px; padding-top: 4px; border-top: 1px solid #444; font-size: 11px; color: #888;">'
+            '<table width="100%"><tr>'
+            '<td align="center"><span style="color:#88D8FF;">🔊</span> Alt+P</td>'
+            '<td align="center"><span style="color:#88D8FF;">➕</span> Alt+A</td>'
+            '<td align="center"><span style="color:#88D8FF;">📋</span> Alt+C</td>'
+            '<td align="center"><span style="color:#88D8FF;">📖</span> Alt+J</td>'
+            '<td align="center"><span style="color:#88D8FF;">🌐</span> Alt+D</td>'
+            '</tr></table>'
+            '</div>'
         )
         full_html += buttons_html
 
-        # Use display_label for sizing (performance optimization: avoid double HTML parsing)
+        # Use display_label for sizing
         self.display_label.setText(full_html)
         
+        # Recalculate height
         final_height = self.display_label.heightForWidth(int(optimal_content_width))
 
         margins = self.content_layout.contentsMargins()
@@ -1065,7 +1107,10 @@ ruby:hover rt {
         max_height_setting = getattr(config, 'max_popup_height', 400)
         final_height_val = min(final_height + vertical_padding + extra_labels_height, max_height_setting)
         
-        final_size = QSize(int(optimal_content_width) + horizontal_padding, int(final_height_val))
+        # Clamp width to max_popup_width strictly
+        final_width = min(int(optimal_content_width) + horizontal_padding, getattr(config, 'max_popup_width', 500))
+        
+        final_size = QSize(final_width, int(final_height_val))
         self.setFixedSize(final_size)
 
     def move_to(self, x, y):

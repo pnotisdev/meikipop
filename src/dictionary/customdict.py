@@ -19,6 +19,7 @@ class Dictionary:
         self.lookup_kana = defaultdict(list)
         self.deconjugator_rules = []
         self.priority_map = {}
+        self.frequency_map = {}
         self._is_loaded = False
 
     def import_jmdict_json(self, json_paths: list[str]):
@@ -122,10 +123,10 @@ class Dictionary:
         if cached:
             return cached, os.path.basename(zip_path) + " (Cached)"
         
-        new_entries = parse_yomichan_zip(zip_path)
-        if new_entries:
-            self._save_to_cache(new_entries, cache_path)
-            return new_entries, os.path.basename(zip_path)
+        result = parse_yomichan_zip(zip_path)
+        if result and (result[0] or result[1]):
+            self._save_to_cache(result, cache_path)
+            return result, os.path.basename(zip_path)
         return None
 
     def _load_yomichan_folder_entries(self, dir_path: str):
@@ -134,13 +135,13 @@ class Dictionary:
         if cached:
             return cached, os.path.basename(dir_path) + " (Cached)"
             
-        new_entries = parse_yomichan_dir(dir_path)
-        if new_entries:
-            self._save_to_cache(new_entries, cache_path)
-            return new_entries, os.path.basename(dir_path)
+        result = parse_yomichan_dir(dir_path)
+        if result and (result[0] or result[1]):
+            self._save_to_cache(result, cache_path)
+            return result, os.path.basename(dir_path)
         return None
 
-    def _load_entries_from_cache(self, source_path: str, cache_path: str) -> list | None:
+    def _load_entries_from_cache(self, source_path: str, cache_path: str) -> tuple | None:
         """Attempts to load entries from cache. Returns entries if successful, else None."""
         if not os.path.exists(cache_path):
             return None
@@ -156,9 +157,12 @@ class Dictionary:
 
             logger.info(f"Loading cache from {cache_path}")
             with open(cache_path, 'rb') as f:
-                new_entries = pickle.load(f)
+                data = pickle.load(f)
             
-            return new_entries
+            if isinstance(data, list):
+                return data, {}
+            
+            return data
         except Exception as e:
             logger.warning(f"Failed to load cache {cache_path}: {e}")
             return None
@@ -171,17 +175,19 @@ class Dictionary:
             return True
         return False
 
-    def _save_to_cache(self, entries: list, cache_path: str):
+    def _save_to_cache(self, data: tuple, cache_path: str):
         """Saves entries to cache."""
         try:
             logger.info(f"Saving cache to {cache_path}")
             with open(cache_path, 'wb') as f:
-                pickle.dump(entries, f)
+                pickle.dump(data, f)
         except Exception as e:
             logger.error(f"Failed to save cache {cache_path}: {e}")
 
-    def _add_entries(self, new_entries: list, source_name: str):
+    def _add_entries(self, data: tuple, source_name: str):
         """Helper to add entries to the dictionary and update lookups."""
+        new_entries, frequency_map = data
+        
         start_index = len(self.entries)
         self.entries.extend(new_entries)
         
@@ -193,10 +199,13 @@ class Dictionary:
             for reb in entry['rebs']:
                 self.lookup_kana[reb].append(real_index)
         
-        logger.info(f"Imported {len(new_entries)} entries from {source_name}")
+        if frequency_map:
+            self.frequency_map.update(frequency_map)
+        
+        logger.info(f"Imported {len(new_entries)} entries and {len(frequency_map)} frequency items from {source_name}")
 
     def save_dictionary(self, file_path: str):
-        data_to_save = {'entries': self.entries, 'lookup_kan': self.lookup_kan, 'lookup_kana': self.lookup_kana, 'deconjugator_rules': self.deconjugator_rules, 'priority_map': self.priority_map}
+        data_to_save = {'entries': self.entries, 'lookup_kan': self.lookup_kan, 'lookup_kana': self.lookup_kana, 'deconjugator_rules': self.deconjugator_rules, 'priority_map': self.priority_map, 'frequency_map': self.frequency_map}
         with open(file_path, 'wb') as f:
             pickle.dump(data_to_save, f, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -221,6 +230,7 @@ class Dictionary:
 
             self.deconjugator_rules = data['deconjugator_rules']
             self.priority_map = data['priority_map']
+            self.frequency_map = data.get('frequency_map', {})
             self._is_loaded = True
             duration = time.perf_counter() - start_time
             logger.info(f"Dictionary loaded in {duration:.2f} seconds.")

@@ -191,6 +191,10 @@ class Lookup(threading.Thread):
                 for entry, form, match_len in current_prefix_results:
                     if entry['id'] not in all_found_entries:
                         all_found_entries[entry['id']] = (entry, form, match_len)
+                
+                # Found a match for the longest possible prefix. 
+                # Stop looking for shorter substrings to reduce noise (e.g. preventing "空" when "空気" is found).
+                break
 
         results = self._format_and_sort_results(list(all_found_entries.values()), truncated_lookup)
 
@@ -282,13 +286,25 @@ class Lookup(threading.Thread):
                                                 matched_reading)
 
             merge_key = (written_form, reading_to_display)
+            
+            # Inject frequency data
+            extra_freq_tags = set()
+            freq_info = self.dictionary.frequency_map.get(merge_key)
+            if freq_info:
+                if isinstance(freq_info, dict):
+                    val = freq_info.get('displayValue') or freq_info.get('value')
+                    if val:
+                        extra_freq_tags.add(f"Freq: {val}")
+                else:
+                    extra_freq_tags.add(f"Freq: {freq_info}")
+
             if merge_key not in merged_entries:
                 merged_entries[merge_key] = {
                     "id": entry_data['id'],
                     "written_form": written_form,
                     "reading": reading_to_display, "senses": list(entry_data['senses']),
                     "tags": self._get_misc_tags(entry_data),
-                    "frequency_tags": self._get_frequency_tags(entry_data),
+                    "frequency_tags": self._get_frequency_tags(entry_data) | extra_freq_tags,
                     "deconjugation_process": form.process,
                     "priority": priority,
                     "match_len": match_len
@@ -298,6 +314,7 @@ class Lookup(threading.Thread):
                 current_entry['senses'].extend(entry_data['senses'])
                 current_entry['tags'].update(self._get_misc_tags(entry_data))
                 current_entry['frequency_tags'].update(self._get_frequency_tags(entry_data))
+                current_entry['frequency_tags'].update(extra_freq_tags)
                 if priority > current_entry['priority']:
                     current_entry['priority'] = priority
                     current_entry['id'] = entry_data['id']

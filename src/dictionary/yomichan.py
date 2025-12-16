@@ -4,7 +4,7 @@ import os
 import logging
 import hashlib
 import shutil
-from typing import List, Dict, Any, Callable, Optional
+from typing import List, Dict, Any, Callable, Optional, Tuple
 from pathlib import Path
 
 try:
@@ -374,19 +374,20 @@ def _extract_text_recursive(item: Any) -> str:
             return _extract_text_recursive(item['content'])
     return ""
 
-def parse_yomichan_zip(zip_path: str) -> List[Dict[str, Any]]:
+def parse_yomichan_zip(zip_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
     """
     Parses a Yomichan/Yomitan dictionary ZIP file and returns a list of entries
     formatted for the internal Dictionary class.
     """
     entries = []
+    frequency_map = {}
     
     try:
         with zipfile.ZipFile(zip_path, 'r') as z:
             # Check for index.json to verify it's a valid dictionary
             if 'index.json' not in z.namelist():
                 logger.warning(f"Skipping {zip_path}: index.json not found")
-                return []
+                return [], {}
 
             with z.open('index.json') as f:
                 index = json.load(f)
@@ -448,27 +449,42 @@ def parse_yomichan_zip(zip_path: str) -> List[Dict[str, Any]]:
                             entry = converter.convert_entry(item, title)
                             if entry:
                                 entries.append(entry)
+                elif filename.startswith('term_meta_bank_') and filename.endswith('.json'):
+                    with z.open(filename) as f:
+                        meta_bank = json.load(f)
+                        for item in meta_bank:
+                            if isinstance(item, list) and len(item) >= 3 and item[1] == 'freq':
+                                term = item[0]
+                                data = item[2]
+                                reading = ""
+                                if isinstance(data, dict):
+                                    reading = data.get('reading', "")
+                                    freq_val = data
+                                    if 'frequency' in data:
+                                         freq_val = data['frequency']
+                                    frequency_map[(term, reading)] = freq_val
                                 
     except zipfile.BadZipFile:
         logger.error(f"Failed to read {zip_path}: Bad ZIP file")
     except Exception as e:
         logger.error(f"Error importing {zip_path}: {e}")
 
-    return entries
+    return entries, frequency_map
 
-def parse_yomichan_dir(dir_path: str) -> List[Dict[str, Any]]:
+def parse_yomichan_dir(dir_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
     """
     Parses a Yomichan/Yomitan dictionary directory and returns a list of entries
     formatted for the internal Dictionary class.
     """
     entries = []
+    frequency_map = {}
     
     try:
         # Check for index.json to verify it's a valid dictionary
         index_path = os.path.join(dir_path, 'index.json')
         if not os.path.exists(index_path):
             logger.warning(f"Skipping {dir_path}: index.json not found")
-            return []
+            return [], {}
 
         with open(index_path, 'r', encoding='utf-8') as f:
             index = json.load(f)
@@ -525,11 +541,26 @@ def parse_yomichan_dir(dir_path: str) -> List[Dict[str, Any]]:
                         entry = converter.convert_entry(item, title)
                         if entry:
                             entries.append(entry)
+            elif filename.startswith('term_meta_bank_') and filename.endswith('.json'):
+                file_path = os.path.join(dir_path, filename)
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    meta_bank = json.load(f)
+                    for item in meta_bank:
+                        if isinstance(item, list) and len(item) >= 3 and item[1] == 'freq':
+                            term = item[0]
+                            data = item[2]
+                            reading = ""
+                            if isinstance(data, dict):
+                                reading = data.get('reading', "")
+                                freq_val = data
+                                if 'frequency' in data:
+                                     freq_val = data['frequency']
+                                frequency_map[(term, reading)] = freq_val
                                 
     except Exception as e:
         logger.error(f"Error importing {dir_path}: {e}")
 
-    return entries
+    return entries, frequency_map
 
 # Keep _convert_yomichan_entry for backward compatibility if imported elsewhere, 
 # but redirect to class
