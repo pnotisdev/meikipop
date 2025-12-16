@@ -930,8 +930,13 @@ ruby:hover rt {
         
         # --- Header ---
         header_html = f'<div style="margin-bottom: 2px;">'
-        header_html += f'<span style="font-size:{fs_head}px; font-weight:bold; color:{c_word};">{entry.written_form}</span>'
         
+        if entry.matched_text and entry.matched_text != entry.written_form:
+             header_html += f'<div style="font-size:{fs_head+4}px; font-weight:bold; color:{c_word}; margin-bottom:2px;">{entry.matched_text}</div>'
+             header_html += f'<span style="font-size:{fs_head-2}px; font-weight:bold; color:{c_fg};">{entry.written_form}</span>'
+        else:
+             header_html += f'<span style="font-size:{fs_head}px; font-weight:bold; color:{c_word};">{entry.written_form}</span>'
+
         if entry.reading:
             header_html += f'&nbsp;&nbsp;<span style="font-size:{fs_head}px; color:{c_read};">[{entry.reading}]</span>'
         header_html += "</div>"
@@ -956,8 +961,12 @@ ruby:hover rt {
                 all_tags.append(make_badge(tag, color=c_fg))
                 
         if entry.deconjugation_process and config.show_deconjugation:
-             deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
-             if deconj_str:
+             filtered_process = [p for p in entry.deconjugation_process if p and not (p.startswith('(') and p.endswith(')'))]
+             if filtered_process:
+                 deconj_str = ", ".join(filtered_process)
+                 all_tags.append(f'<span style="color:{c_fg}; font-size:{fs_def-2}px; opacity:0.7;">({deconj_str})</span>')
+             elif entry.deconjugation_process:
+                 deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
                  all_tags.append(f'<span style="color:{c_fg}; font-size:{fs_def-2}px; opacity:0.7;">({deconj_str})</span>')
 
         if all_tags:

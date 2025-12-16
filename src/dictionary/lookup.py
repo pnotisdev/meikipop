@@ -25,6 +25,7 @@ class DictionaryEntry:
     frequency_tags: Set[str]
     deconjugation_process: tuple
     priority: float = 0.0
+    matched_text: str = ""
 
 
 logger = logging.getLogger(__name__)
@@ -307,7 +308,8 @@ class Lookup(threading.Thread):
                     "frequency_tags": self._get_frequency_tags(entry_data) | extra_freq_tags,
                     "deconjugation_process": form.process,
                     "priority": priority,
-                    "match_len": match_len
+                    "match_len": match_len,
+                    "matched_text": original_lookup[:match_len] if match_len else ""
                 }
             else:
                 current_entry = merged_entries[merge_key]
@@ -319,6 +321,7 @@ class Lookup(threading.Thread):
                     current_entry['priority'] = priority
                     current_entry['id'] = entry_data['id']
                     current_entry['deconjugation_process'] = form.process
+                    current_entry['matched_text'] = original_lookup[:match_len] if match_len else ""
 
         final_results_as_dicts = list(merged_entries.values())
         final_results_as_dicts.sort(key=lambda x: (x['match_len'], x['priority']), reverse=True)
