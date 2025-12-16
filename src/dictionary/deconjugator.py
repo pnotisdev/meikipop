@@ -1,6 +1,7 @@
 # deconjugator.py
 from dataclasses import dataclass, field
 from typing import Set
+from functools import lru_cache
 
 @dataclass(frozen=True)
 class Form:
@@ -15,6 +16,7 @@ class Deconjugator:
     def __init__(self, rules: list[dict]):
         self.rules = [r for r in rules if isinstance(r, dict)]
 
+    @lru_cache(maxsize=1024)
     def deconjugate(self, text: str) -> Set[Form]:
         clean_text = text.strip()
         if not clean_text:

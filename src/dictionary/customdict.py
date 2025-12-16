@@ -4,6 +4,7 @@ import logging
 import pickle
 import time
 import os
+import concurrent.futures
 from collections import defaultdict
 
 from src.config.config import IS_WINDOWS, config
@@ -85,45 +86,64 @@ class Dictionary:
             # Load only enabled ones
             files_to_load = [f for f in all_available if f in config.enabled_dictionaries]
 
-        for filename in files_to_load:
-            full_path = os.path.join(directory_path, filename)
-            if os.path.isdir(full_path):
-                self.import_yomichan_folder(full_path)
-            else:
-                self.import_yomichan_zip(full_path)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = []
+            for filename in files_to_load:
+                full_path = os.path.join(directory_path, filename)
+                if os.path.isdir(full_path):
+                    futures.append(executor.submit(self._load_yomichan_folder_entries, full_path))
+                else:
+                    futures.append(executor.submit(self._load_yomichan_zip_entries, full_path))
+            
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        entries, source_name = result
+                        self._add_entries(entries, source_name)
+                except Exception as e:
+                    logger.error(f"Error loading dictionary: {e}")
 
     def import_yomichan_zip(self, zip_path: str):
         """Imports a single Yomichan/Yomitan dictionary ZIP."""
-        # Check for cache
-        cache_path = zip_path + ".cache.pkl"
-        if self._load_from_cache(zip_path, cache_path):
-            return
-
-        new_entries = parse_yomichan_zip(zip_path)
-        if not new_entries:
-            return
-
-        self._save_to_cache(new_entries, cache_path)
-        self._add_entries(new_entries, os.path.basename(zip_path))
+        result = self._load_yomichan_zip_entries(zip_path)
+        if result:
+            self._add_entries(*result)
 
     def import_yomichan_folder(self, dir_path: str):
         """Imports a single Yomichan/Yomitan dictionary directory."""
-        # Check for cache
+        result = self._load_yomichan_folder_entries(dir_path)
+        if result:
+            self._add_entries(*result)
+
+    def _load_yomichan_zip_entries(self, zip_path: str):
+        cache_path = zip_path + ".cache.pkl"
+        cached = self._load_entries_from_cache(zip_path, cache_path)
+        if cached:
+            return cached, os.path.basename(zip_path) + " (Cached)"
+        
+        new_entries = parse_yomichan_zip(zip_path)
+        if new_entries:
+            self._save_to_cache(new_entries, cache_path)
+            return new_entries, os.path.basename(zip_path)
+        return None
+
+    def _load_yomichan_folder_entries(self, dir_path: str):
         cache_path = os.path.join(dir_path, "dictionary.cache.pkl")
-        if self._load_from_cache(dir_path, cache_path):
-            return
-
+        cached = self._load_entries_from_cache(dir_path, cache_path)
+        if cached:
+            return cached, os.path.basename(dir_path) + " (Cached)"
+            
         new_entries = parse_yomichan_dir(dir_path)
-        if not new_entries:
-            return
+        if new_entries:
+            self._save_to_cache(new_entries, cache_path)
+            return new_entries, os.path.basename(dir_path)
+        return None
 
-        self._save_to_cache(new_entries, cache_path)
-        self._add_entries(new_entries, os.path.basename(dir_path))
-
-    def _load_from_cache(self, source_path: str, cache_path: str) -> bool:
-        """Attempts to load entries from cache. Returns True if successful."""
+    def _load_entries_from_cache(self, source_path: str, cache_path: str) -> list | None:
+        """Attempts to load entries from cache. Returns entries if successful, else None."""
         if not os.path.exists(cache_path):
-            return False
+            return None
         
         try:
             # Check modification times
@@ -132,17 +152,24 @@ class Dictionary:
             
             if source_mtime > cache_mtime:
                 logger.info(f"Cache outdated for {source_path}")
-                return False
+                return None
 
             logger.info(f"Loading cache from {cache_path}")
             with open(cache_path, 'rb') as f:
                 new_entries = pickle.load(f)
             
-            self._add_entries(new_entries, os.path.basename(source_path) + " (Cached)")
-            return True
+            return new_entries
         except Exception as e:
             logger.warning(f"Failed to load cache {cache_path}: {e}")
-            return False
+            return None
+
+    def _load_from_cache(self, source_path: str, cache_path: str) -> bool:
+        # Deprecated, kept for compatibility if needed, but internal usage replaced
+        entries = self._load_entries_from_cache(source_path, cache_path)
+        if entries:
+            self._add_entries(entries, os.path.basename(source_path) + " (Cached)")
+            return True
+        return False
 
     def _save_to_cache(self, entries: list, cache_path: str):
         """Saves entries to cache."""
