@@ -20,3 +20,5 @@ build/
 data/
 config.ini
 jmdict_enhanced.pkl
+
+/user_dictionaries

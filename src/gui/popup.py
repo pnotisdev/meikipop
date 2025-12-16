@@ -53,10 +53,6 @@ class Popup(QWidget):
         self.timer.timeout.connect(self.process_latest_data_loop)
         self.timer.start(10)
 
-        self.probe_label = QLabel()
-        self.probe_label.setWordWrap(True)
-        self.probe_label.setTextFormat(Qt.TextFormat.RichText)
-
         self.is_calibrated = False
         self.header_chars_per_line = 50
         self.def_chars_per_line = 50
@@ -872,9 +868,7 @@ ruby:hover rt {
         latest_data, latest_context = self.get_latest_data()
         if latest_data and (latest_data != self._last_latest_data or latest_context != self._last_latest_context):
             # update popup content
-            full_html, new_size = self._calculate_content_and_size_char_count(latest_data)
-            self.display_label.setText(full_html)
-            self.setFixedSize(new_size)
+            self._update_popup_content(latest_data)
         self._last_latest_data = latest_data
         self._last_latest_context = latest_context
 
@@ -924,85 +918,126 @@ ruby:hover rt {
         mouse_pos = QCursor.pos()
         self.move_to(mouse_pos.x(), mouse_pos.y())
 
-    def _calculate_content_and_size_char_count(self, entries: Optional[List[DictionaryEntry]]) -> tuple[
-        Optional[str], Optional[QSize]]:
-        if not self.is_calibrated: return None, None
+    def _generate_entry_html(self, entry: DictionaryEntry, index: int) -> tuple[str, float]:
+        header_text_calc = entry.written_form
+        if entry.reading: header_text_calc += f" [{entry.reading}]"
+        if config.show_tags and entry.tags:
+            header_text_calc += f' [{", ".join(sorted(list(entry.tags)))}]'
+        if config.show_frequency and entry.frequency_tags:
+            header_text_calc += f' [{", ".join(sorted(list(entry.frequency_tags)))}]'
+        header_ratio = len(header_text_calc) / self.header_chars_per_line
+        max_ratio = header_ratio
 
-        if not entries:
-            return None, None
+        # --- HTML construction ---
+        header_html = f'<span style="color: {config.color_highlight_word}; font-size:{config.font_size_header}px;">{entry.written_form}</span>'
+        if entry.reading: header_html += f' <span style="color: {config.color_highlight_reading}; font-size:{config.font_size_header - 2}px;">[{entry.reading}]</span>'
+        if config.show_tags and entry.tags:
+            tags_str = ", ".join(sorted(list(entry.tags)))
+            header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.7;">[{tags_str}]</span>'
+        if config.show_frequency and entry.frequency_tags:
+            freq_str = ", ".join(sorted(list(entry.frequency_tags)))
+            header_html += f' <span style="color:{config.color_highlight_word}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">[{freq_str}]</span>'
+        if entry.deconjugation_process and config.show_deconjugation:
+            deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
+            if deconj_str:
+                header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
+        def_text_parts_calc = []
+        def_text_parts_html = []
+        for idx, sense in enumerate(entry.senses):
+            glosses_str = '; '.join(sense.get('glosses', []))
+            pos_list = sense.get('pos', [])
+            sense_calc = f"({idx + 1})"
+            sense_html = f"<b>({idx + 1})</b> "
+            if config.show_pos and pos_list:
+                pos_str = f' ({", ".join(pos_list)})'
+                sense_calc += pos_str
+                sense_html += f'<span style="color:{config.color_foreground}; opacity:0.7;"><i>{pos_str}</i></span> '
+            sense_calc += glosses_str
+            sense_html += glosses_str
+            def_text_parts_calc.append(sense_calc)
+            def_text_parts_html.append(sense_html)
 
-        all_html_parts = []
+        if config.compact_mode:
+            separator = "; "
+            full_def_text_html = separator.join(def_text_parts_html)
+            def_ratio = len(separator.join(def_text_parts_calc)) / self.def_chars_per_line
+            max_ratio = max(max_ratio, def_ratio)
+        else:
+            # Use <br> for non-compact mode, but also allow <br> inside definitions (from structured content)
+            # We join parts with <br>
+            separator = "<br>"
+            full_def_text_html = separator.join(def_text_parts_html)
+            
+            # Calculate ratio based on longest line in definitions
+            for def_text_calc in def_text_parts_calc:
+                # Split by newlines if any (from structured content)
+                lines = def_text_calc.split('\n')
+                for line in lines:
+                    def_ratio = len(line) / self.def_chars_per_line
+                    max_ratio = max(max_ratio, def_ratio)
+
+        definitions_html_final = f'<div style="font-size:{config.font_size_definitions}px;">{full_def_text_html}</div>'
+        return f"{header_html}{definitions_html_final}", max_ratio
+
+    def _update_popup_content(self, entries: Optional[List[DictionaryEntry]]):
+        if not self.is_calibrated or not entries:
+            return
+
+        entries_to_show = entries[:min(len(entries), MAX_DICT_ENTRIES)]
+        use_two_columns = len(entries_to_show) >= 4
+
+        full_html = ""
         max_ratio = 0.0
 
-        for i, entry in enumerate(entries[:min(len(entries), MAX_DICT_ENTRIES)]):
-            if i > 0:
-                all_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+        if use_two_columns:
+            mid = (len(entries_to_show) + 1) // 2
+            left_entries = entries_to_show[:mid]
+            right_entries = entries_to_show[mid:]
 
-            header_text_calc = entry.written_form
-            if entry.reading: header_text_calc += f" [{entry.reading}]"
-            if config.show_tags and entry.tags:
-                header_text_calc += f' [{", ".join(sorted(list(entry.tags)))}]'
-            if config.show_frequency and entry.frequency_tags:
-                header_text_calc += f' [{", ".join(sorted(list(entry.frequency_tags)))}]'
-            header_ratio = len(header_text_calc) / self.header_chars_per_line
-            max_ratio = max(max_ratio, header_ratio)
+            left_html_parts = []
+            max_ratio_left = 0.0
+            for i, entry in enumerate(left_entries):
+                html, ratio = self._generate_entry_html(entry, i)
+                if i > 0: left_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+                left_html_parts.append(html)
+                max_ratio_left = max(max_ratio_left, ratio)
 
-            # --- HTML construction ---
-            header_html = f'<span style="color: {config.color_highlight_word}; font-size:{config.font_size_header}px;">{entry.written_form}</span>'
-            if entry.reading: header_html += f' <span style="color: {config.color_highlight_reading}; font-size:{config.font_size_header - 2}px;">[{entry.reading}]</span>'
-            if config.show_tags and entry.tags:
-                tags_str = ", ".join(sorted(list(entry.tags)))
-                header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.7;">[{tags_str}]</span>'
-            if config.show_frequency and entry.frequency_tags:
-                freq_str = ", ".join(sorted(list(entry.frequency_tags)))
-                header_html += f' <span style="color:{config.color_highlight_word}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">[{freq_str}]</span>'
-            if entry.deconjugation_process and config.show_deconjugation:
-                deconj_str = " ← ".join(p for p in entry.deconjugation_process if p)
-                if deconj_str:
-                    header_html += f' <span style="color:{config.color_foreground}; font-size:{config.font_size_definitions - 2}px; opacity:0.8;">({deconj_str})</span>'
-            def_text_parts_calc = []
-            def_text_parts_html = []
-            for idx, sense in enumerate(entry.senses):
-                glosses_str = '; '.join(sense.get('glosses', []))
-                pos_list = sense.get('pos', [])
-                sense_calc = f"({idx + 1})"
-                sense_html = f"<b>({idx + 1})</b> "
-                if config.show_pos and pos_list:
-                    pos_str = f' ({", ".join(pos_list)})'
-                    sense_calc += pos_str
-                    sense_html += f'<span style="color:{config.color_foreground}; opacity:0.7;"><i>{pos_str}</i></span> '
-                sense_calc += glosses_str
-                sense_html += glosses_str
-                def_text_parts_calc.append(sense_calc)
-                def_text_parts_html.append(sense_html)
+            right_html_parts = []
+            max_ratio_right = 0.0
+            for i, entry in enumerate(right_entries):
+                html, ratio = self._generate_entry_html(entry, i)
+                if i > 0: right_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+                right_html_parts.append(html)
+                max_ratio_right = max(max_ratio_right, ratio)
 
-            if config.compact_mode:
-                separator = "; "
-                full_def_text_html = separator.join(def_text_parts_html)
-                def_ratio = len(separator.join(def_text_parts_calc)) / self.def_chars_per_line
-                max_ratio = max(max_ratio, def_ratio)
-            else:
-                # Use <br> for non-compact mode, but also allow <br> inside definitions (from structured content)
-                # We join parts with <br>
-                separator = "<br>"
-                full_def_text_html = separator.join(def_text_parts_html)
-                
-                # Calculate ratio based on longest line in definitions
-                for def_text_calc in def_text_parts_calc:
-                    # Split by newlines if any (from structured content)
-                    lines = def_text_calc.split('\n')
-                    for line in lines:
-                        def_ratio = len(line) / self.def_chars_per_line
-                        max_ratio = max(max_ratio, def_ratio)
+            full_html = f"""
+            <table width="100%" cellpadding="5" cellspacing="0">
+            <tr>
+            <td width="50%" valign="top">{''.join(left_html_parts)}</td>
+            <td width="50%" valign="top" style="border-left: 1px solid {config.border_color}; padding-left: 10px;">{''.join(right_html_parts)}</td>
+            </tr>
+            </table>
+            """
+            max_ratio = max(max_ratio_left, max_ratio_right)
+            
+            # For 2 columns, we allow wider content.
+            # We assume max_content_width is for a single column.
+            optimal_col_width = self.max_content_width * min(1.0, max_ratio)
+            optimal_content_width = (optimal_col_width * 2) + 40 # padding/gap
+            
+        else:
+            all_html_parts = []
+            for i, entry in enumerate(entries_to_show):
+                html, ratio = self._generate_entry_html(entry, i)
+                if i > 0: all_html_parts.append('<hr style="margin-top: 0px; margin-bottom: 0px;">')
+                all_html_parts.append(html)
+                max_ratio = max(max_ratio, ratio)
+            
+            full_html = "".join(all_html_parts)
+            optimal_content_width = self.max_content_width * min(1.0, max_ratio)
 
-            definitions_html_final = f'<div style="font-size:{config.font_size_definitions}px;">{full_def_text_html}</div>'
-            all_html_parts.append(f"{header_html}{definitions_html_final}")
-
-        optimal_content_width = self.max_content_width * min(1.0, max_ratio)
         optimal_content_width = max(optimal_content_width, 200)
 
-        full_html = "".join(all_html_parts)
-        
         # Add buttons
         buttons_html = (
             '<br><br>'
@@ -1014,9 +1049,10 @@ ruby:hover rt {
         )
         full_html += buttons_html
 
-        self.probe_label.setText(full_html)
-
-        final_height = self.probe_label.heightForWidth(int(optimal_content_width))
+        # Use display_label for sizing (performance optimization: avoid double HTML parsing)
+        self.display_label.setText(full_html)
+        
+        final_height = self.display_label.heightForWidth(int(optimal_content_width))
 
         margins = self.content_layout.contentsMargins()
         border_width = 1
@@ -1030,7 +1066,7 @@ ruby:hover rt {
         final_height_val = min(final_height + vertical_padding + extra_labels_height, max_height_setting)
         
         final_size = QSize(int(optimal_content_width) + horizontal_padding, int(final_height_val))
-        return full_html, final_size
+        self.setFixedSize(final_size)
 
     def move_to(self, x, y):
         cursor_point = QPoint(x, y)
