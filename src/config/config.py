@@ -76,7 +76,7 @@ class Config:
 
         # Step 2: Load from config.ini, creating it if it doesn't exist
         try:
-            if not config.read('config.ini'):
+            if not config.read('config.ini', encoding='utf-8'):
                 with open('config.ini', 'w', encoding='utf-8') as configfile:
                     config.write(configfile)
                 logger.info("config.ini not found, created with default settings.")
