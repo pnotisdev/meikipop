@@ -47,12 +47,13 @@ THEMES = {
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, ocr_processor: OcrProcessor, popup_window: Popup, input_loop: InputLoop, tray_icon, parent=None):
+    def __init__(self, ocr_processor: OcrProcessor, popup_window: Popup, input_loop: InputLoop, tray_icon, lookup, parent=None):
         super().__init__(parent)
         self.ocr_processor = ocr_processor
         self.popup_window = popup_window
         self.input_loop = input_loop
         self.tray_icon = tray_icon
+        self.lookup = lookup
 
         self.setWindowTitle(f"{APP_NAME} Settings")
         self.setWindowIcon(QIcon("icon.ico"))
@@ -342,5 +343,8 @@ class SettingsDialog(QDialog):
         self.popup_window.reapply_settings()
         self.tray_icon.reapply_settings()
         self.ocr_processor.shared_state.screenshot_trigger_event.set()
+        
+        # Reload dictionaries if needed (we just reload always for now to be safe)
+        self.lookup.reload_dictionaries()
 
         self.accept()

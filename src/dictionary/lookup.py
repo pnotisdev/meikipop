@@ -50,6 +50,29 @@ class Lookup(threading.Thread):
 
         self.CACHE_SIZE = 500
 
+    def reload_dictionaries(self):
+        """Reloads the dictionary from disk/cache."""
+        logger.info("Reloading dictionaries...")
+        
+        # Create a new dictionary instance
+        new_dictionary = Dictionary()
+        
+        # Load base dictionary
+        if not new_dictionary.load_dictionary('jmdict_enhanced.pkl'):
+            logger.error("Failed to reload base dictionary. Aborting reload.")
+            return
+        
+        # Load extra dictionaries
+        if config.extra_dictionaries_dir:
+            new_dictionary.import_yomichan_directory(config.extra_dictionaries_dir)
+            
+        # Swap
+        self.dictionary = new_dictionary
+        self.deconjugator = Deconjugator(self.dictionary.deconjugator_rules)
+        self.lookup_cache.clear()
+        
+        logger.info("Dictionaries reloaded successfully.")
+
     def run(self):
         logger.debug("Lookup thread started.")
         while self.shared_state.running:

@@ -7,7 +7,7 @@ import os
 from collections import defaultdict
 
 from src.config.config import IS_WINDOWS, config
-from src.dictionary.yomichan import parse_yomichan_zip
+from src.dictionary.yomichan import parse_yomichan_zip, parse_yomichan_dir
 
 logger = logging.getLogger(__name__) # Get the logger
 
@@ -59,32 +59,102 @@ class Dictionary:
                 self.priority_map[key] = item[2]
 
     def import_yomichan_directory(self, directory_path: str):
-        """Imports all Yomichan/Yomitan dictionaries (.zip) from a directory."""
+        """Imports all Yomichan/Yomitan dictionaries (.zip or folder) from a directory."""
         if not os.path.exists(directory_path):
             logger.warning(f"Yomichan dictionary directory not found: {directory_path}")
             return
 
         logger.info(f"Scanning for Yomichan dictionaries in: {directory_path}")
         
-        available_files = [f for f in os.listdir(directory_path) if f.lower().endswith('.zip')]
+        # Find zip files
+        available_zips = [f for f in os.listdir(directory_path) if f.lower().endswith('.zip')]
+        
+        # Find directories that look like dictionaries (have index.json)
+        available_dirs = []
+        for f in os.listdir(directory_path):
+            full_path = os.path.join(directory_path, f)
+            if os.path.isdir(full_path) and os.path.exists(os.path.join(full_path, 'index.json')):
+                available_dirs.append(f)
+
+        all_available = available_zips + available_dirs
         
         if config.enabled_dictionaries is None:
             # Default: load all
-            files_to_load = available_files
+            files_to_load = all_available
         else:
             # Load only enabled ones
-            files_to_load = [f for f in available_files if f in config.enabled_dictionaries]
+            files_to_load = [f for f in all_available if f in config.enabled_dictionaries]
 
         for filename in files_to_load:
             full_path = os.path.join(directory_path, filename)
-            self.import_yomichan_zip(full_path)
+            if os.path.isdir(full_path):
+                self.import_yomichan_folder(full_path)
+            else:
+                self.import_yomichan_zip(full_path)
 
     def import_yomichan_zip(self, zip_path: str):
         """Imports a single Yomichan/Yomitan dictionary ZIP."""
+        # Check for cache
+        cache_path = zip_path + ".cache.pkl"
+        if self._load_from_cache(zip_path, cache_path):
+            return
+
         new_entries = parse_yomichan_zip(zip_path)
         if not new_entries:
             return
 
+        self._save_to_cache(new_entries, cache_path)
+        self._add_entries(new_entries, os.path.basename(zip_path))
+
+    def import_yomichan_folder(self, dir_path: str):
+        """Imports a single Yomichan/Yomitan dictionary directory."""
+        # Check for cache
+        cache_path = os.path.join(dir_path, "dictionary.cache.pkl")
+        if self._load_from_cache(dir_path, cache_path):
+            return
+
+        new_entries = parse_yomichan_dir(dir_path)
+        if not new_entries:
+            return
+
+        self._save_to_cache(new_entries, cache_path)
+        self._add_entries(new_entries, os.path.basename(dir_path))
+
+    def _load_from_cache(self, source_path: str, cache_path: str) -> bool:
+        """Attempts to load entries from cache. Returns True if successful."""
+        if not os.path.exists(cache_path):
+            return False
+        
+        try:
+            # Check modification times
+            source_mtime = os.path.getmtime(source_path)
+            cache_mtime = os.path.getmtime(cache_path)
+            
+            if source_mtime > cache_mtime:
+                logger.info(f"Cache outdated for {source_path}")
+                return False
+
+            logger.info(f"Loading cache from {cache_path}")
+            with open(cache_path, 'rb') as f:
+                new_entries = pickle.load(f)
+            
+            self._add_entries(new_entries, os.path.basename(source_path) + " (Cached)")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to load cache {cache_path}: {e}")
+            return False
+
+    def _save_to_cache(self, entries: list, cache_path: str):
+        """Saves entries to cache."""
+        try:
+            logger.info(f"Saving cache to {cache_path}")
+            with open(cache_path, 'wb') as f:
+                pickle.dump(entries, f)
+        except Exception as e:
+            logger.error(f"Failed to save cache {cache_path}: {e}")
+
+    def _add_entries(self, new_entries: list, source_name: str):
+        """Helper to add entries to the dictionary and update lookups."""
         start_index = len(self.entries)
         self.entries.extend(new_entries)
         
@@ -96,7 +166,7 @@ class Dictionary:
             for reb in entry['rebs']:
                 self.lookup_kana[reb].append(real_index)
         
-        logger.info(f"Imported {len(new_entries)} entries from {os.path.basename(zip_path)}")
+        logger.info(f"Imported {len(new_entries)} entries from {source_name}")
 
     def save_dictionary(self, file_path: str):
         data_to_save = {'entries': self.entries, 'lookup_kan': self.lookup_kan, 'lookup_kana': self.lookup_kana, 'deconjugator_rules': self.deconjugator_rules, 'priority_map': self.priority_map}
