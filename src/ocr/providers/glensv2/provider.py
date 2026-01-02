@@ -36,10 +36,10 @@ class GoogleLensOcrV2(OcrProvider):
             scale_factor = math.sqrt(0.5)
             new_width = int(image.width * scale_factor)
             new_height = int(image.height * scale_factor)
-            processed_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            processed_image = processed_image.convert('L').quantize(colors=16)
+            processed_image = image.resize((new_width, new_height), Image.Resampling.BILINEAR)
+            processed_image = processed_image.convert('L') # Grayscale is enough for text usually
             with io.BytesIO() as bio:
-                processed_image.save(bio, format='PNG')
+                processed_image.save(bio, format='JPEG', quality=60) # JPEG is faster to encode than PNG
                 return bio.getvalue(), new_width, new_height
         elif config.quality_mode == 'balanced':
             processed_image = image if image.mode == 'RGB' else image.convert('RGB')

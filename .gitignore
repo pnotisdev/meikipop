@@ -1,12 +1,15 @@
 # Python cache
 __pycache__/
 *.py[cod]
-
-# Environment folders
-venv/
-.venv/
-env/
+*.so
 .env
+venv/
+env/
+
+# Dictionary files
+*.pkl
+*.db
+src/dictionary/jmdict_enhanced.db
 
 # Build artifacts
 dist/
@@ -19,6 +22,5 @@ build/
 # Local project/user files
 data/
 config.ini
-jmdict_enhanced.pkl
 
 /user_dictionaries

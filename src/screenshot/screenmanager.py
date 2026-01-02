@@ -60,13 +60,16 @@ class ScreenManager(threading.Thread):
 
                 if self.last_screenshot and self.last_screenshot.raw == screenshot.raw:
                     logger.debug(f"Screen content didnt change... skipping ocr")
-                    self._sleep_and_handle_loop_exit(0.1)
+                    self._sleep_and_handle_loop_exit(0.2) # Increased sleep time to reduce CPU usage
                     continue
 
                 self.last_screenshot = screenshot
                 img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
                 self.shared_state.ocr_queue.put(img)
                 self.last_ocr_put_time = time.perf_counter()
+                
+                # Cap the capture rate to avoid flooding OCR
+                self._sleep_and_handle_loop_exit(0.05) 
             except:
                 logger.exception("An unexpected error occurred in the screenshot loop. Continuing...")
                 self._sleep_and_handle_loop_exit(1)

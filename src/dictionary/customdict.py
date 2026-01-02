@@ -4,13 +4,80 @@ import logging
 import pickle
 import time
 import os
+import sqlite3
 import concurrent.futures
 from collections import defaultdict
+from typing import List, Any
 
 from src.config.config import IS_WINDOWS, config
 from src.dictionary.yomichan import parse_yomichan_zip, parse_yomichan_dir
 
 logger = logging.getLogger(__name__) # Get the logger
+
+class CompactEntry:
+    __slots__ = ('id', 'kebs', 'rebs', 'senses', 'raw_k_ele', 'raw_r_ele', 'raw_sense')
+    def __init__(self, id, kebs, rebs, senses, raw_k_ele, raw_r_ele, raw_sense):
+        self.id = id
+        self.kebs = kebs
+        self.rebs = rebs
+        self.senses = senses
+        self.raw_k_ele = raw_k_ele
+        self.raw_r_ele = raw_r_ele
+        self.raw_sense = raw_sense
+    
+    def __getitem__(self, key):
+        return getattr(self, key)
+        
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+class SqliteEntryList:
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+        self.cursor = conn.cursor()
+        # Cache the length
+        self.cursor.execute("SELECT COUNT(*) FROM entries")
+        self._len = self.cursor.fetchone()[0]
+
+    def __len__(self):
+        return self._len
+
+    def __getitem__(self, index):
+        if index < 0 or index >= self._len:
+            raise IndexError("list index out of range")
+        
+        # Fetch blob
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT data FROM entries WHERE id = ?", (index,))
+        row = cursor.fetchone()
+        if row:
+            return pickle.loads(row[0])
+        raise IndexError(f"Entry {index} not found in DB")
+
+    def __iter__(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT data FROM entries ORDER BY id")
+        while True:
+            rows = cursor.fetchmany(1000)
+            if not rows: break
+            for row in rows:
+                yield pickle.loads(row[0])
+
+class SqliteLookupMap:
+    def __init__(self, conn: sqlite3.Connection, table_name: str):
+        self.conn = conn
+        self.table_name = table_name
+
+    def get(self, key: str, default=None):
+        cursor = self.conn.cursor()
+        cursor.execute(f"SELECT entry_ids FROM {self.table_name} WHERE text = ?", (key,))
+        row = cursor.fetchone()
+        if row:
+            return pickle.loads(row[0])
+        return default
 
 class Dictionary:
     def __init__(self):
@@ -40,7 +107,7 @@ class Dictionary:
                     senses_processed.append({'glosses': glosses, 'pos': [p.strip('&;') for p in pos]})
             if not (kebs or rebs) or not senses_processed:
                 continue
-            entry = {'id': entry_data['seq'], 'kebs': kebs, 'rebs': rebs, 'senses': senses_processed, 'raw_k_ele': entry_data.get('k_ele', []), 'raw_r_ele': entry_data.get('r_ele', []), 'raw_sense': entry_data.get('sense', [])}
+            entry = CompactEntry(entry_data['seq'], kebs, rebs, senses_processed, entry_data.get('k_ele', []), entry_data.get('r_ele', []), entry_data.get('sense', []))
             self.entries.append(entry)
             entry_index = len(self.entries) - 1
             for keb in kebs:
@@ -189,14 +256,26 @@ class Dictionary:
         new_entries, frequency_map = data
         
         start_index = len(self.entries)
-        self.entries.extend(new_entries)
+        
+        # Convert dict entries to CompactEntry if needed
+        compact_entries = []
+        for entry in new_entries:
+            if isinstance(entry, dict):
+                compact_entries.append(CompactEntry(
+                    entry['id'], entry['kebs'], entry['rebs'], entry['senses'],
+                    entry.get('raw_k_ele', []), entry.get('raw_r_ele', []), entry.get('raw_sense', [])
+                ))
+            else:
+                compact_entries.append(entry)
+                
+        self.entries.extend(compact_entries)
         
         # Update lookups
-        for i, entry in enumerate(new_entries):
+        for i, entry in enumerate(compact_entries):
             real_index = start_index + i
-            for keb in entry['kebs']:
+            for keb in entry.kebs:
                 self.lookup_kan[keb].append(real_index)
-            for reb in entry['rebs']:
+            for reb in entry.rebs:
                 self.lookup_kana[reb].append(real_index)
         
         if frequency_map:
@@ -209,9 +288,60 @@ class Dictionary:
         with open(file_path, 'wb') as f:
             pickle.dump(data_to_save, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+    def convert_to_sqlite(self, db_path: str):
+        """Converts the currently loaded in-memory dictionary to an SQLite database."""
+        if os.path.exists(db_path):
+            try:
+                os.remove(db_path)
+            except OSError:
+                logger.warning(f"Could not remove existing DB {db_path}, trying to overwrite.")
+            
+        logger.info(f"Converting dictionary to SQLite: {db_path}...")
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Create tables
+        cursor.execute("CREATE TABLE entries (id INTEGER PRIMARY KEY, data BLOB)")
+        cursor.execute("CREATE TABLE lookup_kan (text TEXT PRIMARY KEY, entry_ids BLOB)")
+        cursor.execute("CREATE TABLE lookup_kana (text TEXT PRIMARY KEY, entry_ids BLOB)")
+        cursor.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB)")
+        
+        # Insert entries
+        logger.info("Inserting entries...")
+        cursor.execute("BEGIN TRANSACTION")
+        for i, entry in enumerate(self.entries):
+            cursor.execute("INSERT INTO entries (id, data) VALUES (?, ?)", (i, pickle.dumps(entry, protocol=pickle.HIGHEST_PROTOCOL)))
+        
+        # Insert lookups
+        logger.info("Inserting lookups...")
+        for text, ids in self.lookup_kan.items():
+            cursor.execute("INSERT INTO lookup_kan (text, entry_ids) VALUES (?, ?)", (text, pickle.dumps(ids, protocol=pickle.HIGHEST_PROTOCOL)))
+            
+        for text, ids in self.lookup_kana.items():
+            cursor.execute("INSERT INTO lookup_kana (text, entry_ids) VALUES (?, ?)", (text, pickle.dumps(ids, protocol=pickle.HIGHEST_PROTOCOL)))
+            
+        # Insert meta
+        meta_data = {
+            'deconjugator_rules': self.deconjugator_rules,
+            'priority_map': self.priority_map,
+            'frequency_map': self.frequency_map
+        }
+        for k, v in meta_data.items():
+            cursor.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (k, pickle.dumps(v, protocol=pickle.HIGHEST_PROTOCOL)))
+            
+        conn.commit()
+        conn.close()
+        logger.info("SQLite conversion complete.")
+
     def load_dictionary(self, file_path: str) -> bool:
         if self._is_loaded:
             return True
+            
+        # Check for SQLite DB first
+        db_path = file_path.replace('.pkl', '.db')
+        if os.path.exists(db_path):
+            return self.load_dictionary_sqlite(db_path)
+            
         logger.info("Loading dictionary from file...")
         start_time = time.perf_counter()
         try:
@@ -220,8 +350,31 @@ class Dictionary:
             
             if config.enable_jmdict:
                 self.entries = data['entries']
+                # Convert to CompactEntry if loaded from old pickle
+                if self.entries and isinstance(self.entries[0], dict):
+                    logger.info("Converting dictionary entries to compact format...")
+                    new_entries = []
+                    for e in self.entries:
+                        new_entries.append(CompactEntry(
+                            e['id'], e['kebs'], e['rebs'], e['senses'],
+                            e.get('raw_k_ele', []), e.get('raw_r_ele', []), e.get('raw_sense', [])
+                        ))
+                    self.entries = new_entries
+                    logger.info("Conversion complete.")
+
                 self.lookup_kan = data['lookup_kan']
                 self.lookup_kana = data['lookup_kana']
+                
+                # Auto-convert to SQLite for next time
+                try:
+                    self.deconjugator_rules = data['deconjugator_rules']
+                    self.priority_map = data['priority_map']
+                    self.frequency_map = data.get('frequency_map', {})
+                    self.convert_to_sqlite(db_path)
+                    logger.info("Automatically converted dictionary to SQLite for future performance.")
+                except Exception as e:
+                    logger.error(f"Failed to auto-convert to SQLite: {e}")
+                    
             else:
                 logger.info("JMDict disabled in settings. Skipping JMDict entries.")
                 self.entries = []
@@ -242,4 +395,37 @@ class Dictionary:
             return False
         except Exception as e:
             logger.error(f"ERROR: Failed to load dictionary from {file_path}: {e}")
+            return False
+
+    def load_dictionary_sqlite(self, db_path: str) -> bool:
+        logger.info(f"Loading dictionary from SQLite DB: {db_path}")
+        start_time = time.perf_counter()
+        try:
+            # We need to keep the connection open
+            self.conn = sqlite3.connect(db_path, check_same_thread=False)
+            
+            if config.enable_jmdict:
+                self.entries = SqliteEntryList(self.conn)
+                self.lookup_kan = SqliteLookupMap(self.conn, "lookup_kan")
+                self.lookup_kana = SqliteLookupMap(self.conn, "lookup_kana")
+            else:
+                self.entries = []
+                self.lookup_kan = defaultdict(list)
+                self.lookup_kana = defaultdict(list)
+                
+            # Load meta
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT key, value FROM meta")
+            meta = {row[0]: pickle.loads(row[1]) for row in cursor.fetchall()}
+            
+            self.deconjugator_rules = meta.get('deconjugator_rules', [])
+            self.priority_map = meta.get('priority_map', {})
+            self.frequency_map = meta.get('frequency_map', {})
+            
+            self._is_loaded = True
+            duration = time.perf_counter() - start_time
+            logger.info(f"SQLite Dictionary loaded in {duration:.2f} seconds.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load SQLite dictionary: {e}")
             return False

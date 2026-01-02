@@ -182,7 +182,7 @@ class InputLoop(threading.Thread):
             except:
                 logger.exception("An unexpected error occurred in the input loop. Continuing...")
             finally:
-                time.sleep(0.01)
+                time.sleep(0.03) # 30Hz polling is enough
         logger.debug("Input thread stopped.")
 
     def is_virtual_hotkey_down(self):
