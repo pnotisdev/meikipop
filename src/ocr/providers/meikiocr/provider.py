@@ -113,7 +113,7 @@ class MeikiOcrProvider(OcrProvider):
                 full_text=full_text,
                 words=words_in_para,
                 box=line_box,
-                is_vertical=False  # meikiocr currently only supports horizontal text.
+                is_vertical=line_box.width * 1.5 < line_box.height
             )
             paragraphs.append(paragraph)
 

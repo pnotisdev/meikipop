@@ -42,7 +42,7 @@ class OcrProcessor(threading.Thread):
                     f"{self.ocr_backend.NAME} found {len(ocr_result) if ocr_result else 0} paragraphs in {(time.perf_counter() - start_time):.3f}s.")
                 # todo keep last ocr result?
 
-                self.shared_state.hit_scan_queue.put((True, ocr_result))
+                self.shared_state.hit_scan_queue.put(ocr_result)
             except:
                 logger.exception("An unexpected error occurred in the ocr loop. Continuing...")
             finally:
@@ -62,7 +62,7 @@ class OcrProcessor(threading.Thread):
                 self.ocr_backend = provider_class()
                 logger.info(f"Successfully switched OCR provider to '{self.ocr_backend.NAME}'")
                 if config.auto_scan_mode:
-                    self.shared_state.hit_scan_queue.put((True, None))
+                    self.shared_state.hit_scan_queue.put(None)
                     self.shared_state.screenshot_trigger_event.set()
             except Exception as e:
                 logger.error(f"Failed to instantiate provider '{provider_name}': {e}", exc_info=True)
