@@ -212,8 +212,14 @@ class Popup(QWidget):
         safe_term = dedup_key.replace('"', '\\"')
         word_fields = [
             f for f in model_fields
-            if f.lower() in ["front", "word", "expression", "vocab", "kanji", "kana", "reading", "furigana"]
+            if f.lower() in ["front", "word", "expression", "vocab", "kanji", "kana", "reading",
+                              "furigana", "expressionreading", "selectiontext"]
         ]
+        # Also include the explicitly configured expression field if set
+        if config.anki_field_expression:
+            explicit = next((f for f in model_fields if f.lower() == config.anki_field_expression.lower()), None)
+            if explicit and explicit not in word_fields:
+                word_fields.append(explicit)
         for field_name in word_fields:
             queries.append(f'deck:"{config.anki_deck_name}" {field_name}:"{safe_term}"')
 
@@ -669,14 +675,50 @@ ruby:hover rt {
         logger.info(f"Model '{model_name}' fields: {model_fields}")
 
         fields = {}
-        
-        # 1. Identify target fields based on available model fields
-        target_word = next((f for f in model_fields if f.lower() in ["front", "word", "expression", "vocab", "kanji"]), None)
-        target_reading = next((f for f in model_fields if f.lower() in ["reading", "kana", "furigana"]), None)
-        target_meaning = next((f for f in model_fields if f.lower() in ["meaning", "glossary", "definition", "english"]), None)
-        target_sentence = next((f for f in model_fields if f.lower() in ["sentence", "context", "example"]), None)
-        target_picture = next((f for f in model_fields if f.lower() in ["picture", "image", "screenshot"]), None)
-        target_audio = next((f for f in model_fields if f.lower() in ["audio", "wordaudio", "sound"]), None)
+
+        # Helper: resolve a configured field name to an actual model field (case-insensitive)
+        def resolve_field(configured_name, heuristic_names):
+            """Return the model field matching configured_name (if set), else first heuristic match."""
+            if configured_name:
+                match = next((f for f in model_fields if f.lower() == configured_name.lower()), None)
+                if match:
+                    return match
+                logger.warning(f"Configured Anki field '{configured_name}' not found in model '{model_name}'. Falling back to heuristics.")
+            return next((f for f in model_fields if f.lower() in heuristic_names), None)
+
+        # 1. Identify target fields — config overrides take priority, heuristics as fallback
+        target_word = resolve_field(
+            config.anki_field_expression,
+            ["front", "word", "expression", "vocab", "kanji", "selectiontext"]
+        )
+        target_reading = resolve_field(
+            config.anki_field_reading,
+            ["reading", "kana", "furigana", "expressionreading"]
+        )
+        target_meaning = resolve_field(
+            config.anki_field_glossary,
+            ["meaning", "glossary", "definition", "english", "maindefinition"]
+        )
+        target_sentence = resolve_field(
+            config.anki_field_sentence,
+            ["sentence", "context", "example"]
+        )
+        target_picture = resolve_field(
+            config.anki_field_picture,
+            ["picture", "image", "screenshot", "definitionpicture"]
+        )
+        target_audio = resolve_field(
+            config.anki_field_audio,
+            ["audio", "wordaudio", "sound", "expressionaudio"]
+        )
+        target_sentence_audio = resolve_field(
+            config.anki_field_sentence_audio,
+            ["sentenceaudio", "audio-media"]
+        )
+        target_frequency = resolve_field(
+            config.anki_field_frequency,
+            ["frequency", "freqsort", "freq", "freqrank"]
+        )
         target_back = next((f for f in model_fields if f.lower() == "back"), None)
 
         # Decide where to drop audio. Prefer dedicated audio field, otherwise fall back to an existing field so Anki can inject the sound tag.
@@ -688,18 +730,34 @@ ruby:hover rt {
             safe_word = urllib.parse.quote(word or reading)
             safe_reading = urllib.parse.quote(reading or word)
             audio_filename = f"meikipop-audio-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}.mp3"
-            audio_payload = [{
+            audio_entry = {
                 "url": f"https://assets.languagepod101.com/dictionary/japanese/audiomp3.php?kanji={safe_word}&kana={safe_reading}",
                 "filename": audio_filename,
                 "skipHash": "7e2c2f954ef6051373ba916f000168dc",
                 "fields": [fallback_audio_field],
-            }]
+            }
+            # If there is a separate sentence-audio field, attach audio there too
+            # (sentence audio from a live source isn't available, but we leave the field
+            # wired so AnkiConnect can inject it alongside the word audio)
+            audio_payload = [audio_entry]
             if not target_audio:
                 logger.info(f"No dedicated audio field on model; injecting audio into '{fallback_audio_field}'.")
         elif target_audio:
             logger.debug("Audio field present but no word/reading to fetch audio for.")
         else:
             logger.debug("No audio field found on model and no fallback available; skipping audio attach.")
+
+        # Extract frequency value from entry tags (e.g. "Freq: 1234" -> "1234")
+        freq_value = ""
+        if entry.frequency_tags:
+            import re as _re
+            for ftag in sorted(entry.frequency_tags):
+                m = _re.search(r'[\d,]+', ftag)
+                if m:
+                    freq_value = m.group(0).replace(',', '')
+                    break
+            if not freq_value:
+                freq_value = next(iter(sorted(entry.frequency_tags)), "")
 
         # 2. Populate fields
         if target_word:
@@ -727,6 +785,14 @@ ruby:hover rt {
             
         if target_picture:
             fields[target_picture] = screenshot_field
+
+        if target_frequency and freq_value:
+            fields[target_frequency] = freq_value
+
+        # sentence_audio: Meikipop cannot capture sentence audio from screen, so we leave it empty.
+        # This prevents AnkiConnect from rejecting the note due to a missing required field.
+        if target_sentence_audio:
+            fields[target_sentence_audio] = ""
 
         # 3. Handle "Back" field (catch-all for Basic cards)
         if target_back:

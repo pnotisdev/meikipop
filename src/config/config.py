@@ -69,7 +69,16 @@ class Config:
                 'deck_name': 'Default',
                 'model_name': 'Meikipop Card',
                 'url': 'http://127.0.0.1:8765',
-                'show_hover_status': 'false'
+                'show_hover_status': 'false',
+                # Field name overrides — leave blank to use auto-detection heuristics
+                'field_expression': '',
+                'field_reading': '',
+                'field_glossary': '',
+                'field_sentence': '',
+                'field_audio': '',
+                'field_sentence_audio': '',
+                'field_picture': '',
+                'field_frequency': ''
             }
         }
         config.read_dict(defaults)
@@ -130,6 +139,14 @@ class Config:
         self.anki_model_name = config.get('Anki', 'model_name', fallback='Basic')
         self.anki_url = config.get('Anki', 'url', fallback='http://127.0.0.1:8765')
         self.anki_show_hover_status = config.getboolean('Anki', 'show_hover_status', fallback=False)
+        self.anki_field_expression = config.get('Anki', 'field_expression', fallback='')
+        self.anki_field_reading = config.get('Anki', 'field_reading', fallback='')
+        self.anki_field_glossary = config.get('Anki', 'field_glossary', fallback='')
+        self.anki_field_sentence = config.get('Anki', 'field_sentence', fallback='')
+        self.anki_field_audio = config.get('Anki', 'field_audio', fallback='')
+        self.anki_field_sentence_audio = config.get('Anki', 'field_sentence_audio', fallback='')
+        self.anki_field_picture = config.get('Anki', 'field_picture', fallback='')
+        self.anki_field_frequency = config.get('Anki', 'field_frequency', fallback='')
 
         self.is_enabled = True
 
@@ -177,7 +194,15 @@ class Config:
             'deck_name': self.anki_deck_name,
             'model_name': self.anki_model_name,
             'url': self.anki_url,
-            'show_hover_status': str(self.anki_show_hover_status).lower()
+            'show_hover_status': str(self.anki_show_hover_status).lower(),
+            'field_expression': self.anki_field_expression,
+            'field_reading': self.anki_field_reading,
+            'field_glossary': self.anki_field_glossary,
+            'field_sentence': self.anki_field_sentence,
+            'field_audio': self.anki_field_audio,
+            'field_sentence_audio': self.anki_field_sentence_audio,
+            'field_picture': self.anki_field_picture,
+            'field_frequency': self.anki_field_frequency
         }
         with open('config.ini', 'w', encoding='utf-8') as configfile:
             config.write(configfile)
