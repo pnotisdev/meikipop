@@ -56,6 +56,15 @@ def main():
 
     screen_manager = ScreenManager(shared_state)  # trigger region selection
     lookup = Lookup(shared_state, popup_window)  # load dictionary
+    popup_window.lookup = lookup
+
+    from src.utils.audio_recorder import audio_recorder
+    if config.enable_sentence_audio_capture:
+        audio_recorder.start_capturing()
+
+    from src.webbridge.server import start_bridge, stop_bridge
+    if config.bridge_enabled:
+        start_bridge(lookup)
 
     ocr_processor = OcrProcessor(shared_state)
     hit_scanner = HitScanner(shared_state, input_loop, screen_manager)
@@ -79,6 +88,8 @@ def main():
     print(ready_message)
     exit_code = app.exec()
 
+    audio_recorder.request_stop()
+    stop_bridge()
     shared_state.running = False
     shared_state.screenshot_trigger_event.set()
     shared_state.ocr_queue.put(None)

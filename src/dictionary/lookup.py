@@ -3,7 +3,7 @@ import logging
 import re
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Set, Dict, Tuple, List
 
 from src.config.config import config, MAX_DICT_ENTRIES
@@ -26,6 +26,7 @@ class DictionaryEntry:
     deconjugation_process: tuple
     priority: float = 0.0
     matched_text: str = ""
+    pitch_accents: List[int] = field(default_factory=list)
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,9 @@ class Lookup(threading.Thread):
 
         self.dictionary = Dictionary()
         self.lookup_cache = OrderedDict()
+        # Guards lookup_cache since lookup() can now also be called from the mining-bridge's
+        # asyncio thread (POST /lookup), concurrently with this class's own run() loop.
+        self._cache_lock = threading.Lock()
 
         if not self.dictionary.load_dictionary('jmdict_enhanced.pkl'):
             raise RuntimeError("Failed to load dictionary.")
@@ -70,7 +74,8 @@ class Lookup(threading.Thread):
         # Swap
         self.dictionary = new_dictionary
         self.deconjugator = Deconjugator(self.dictionary.deconjugator_rules)
-        self.lookup_cache.clear()
+        with self._cache_lock:
+            self.lookup_cache.clear()
         
         logger.info("Dictionaries reloaded successfully.")
 
@@ -111,9 +116,10 @@ class Lookup(threading.Thread):
 
         truncated_lookup = cleaned_lookup_string[:config.max_lookup_length]
 
-        if truncated_lookup in self.lookup_cache:
-            self.lookup_cache.move_to_end(truncated_lookup)
-            return self.lookup_cache[truncated_lookup]
+        with self._cache_lock:
+            if truncated_lookup in self.lookup_cache:
+                self.lookup_cache.move_to_end(truncated_lookup)
+                return self.lookup_cache[truncated_lookup]
 
         all_found_entries: Dict[int, Tuple[dict, Form, int]] = {}
         found_primary_match = False
@@ -141,10 +147,14 @@ class Lookup(threading.Thread):
                 else:
                     entry_indices = self.dictionary.lookup_kan.get(form.text, [])
 
+                # Batch-fetch all candidate entries for this form in one round-trip
+                # instead of one SQLite query per index across the filtering passes below.
+                entries_by_index = self.dictionary.get_entries_batch(entry_indices)
+
                 # After getting potential entries, filter them based on Part of Speech tags
                 validated_indices = []
                 for index in entry_indices:
-                    entry = self.dictionary.entries[index]
+                    entry = entries_by_index[index]
 
                     # If the form has no tags, it's a direct match, always valid.
                     if not form.tags:
@@ -167,7 +177,7 @@ class Lookup(threading.Thread):
                     filtered_indices = []
                     logger.trace(f"    [Filter ACTIVE] for prefix '{prefix}'")
                     for index in entry_indices:
-                        entry = self.dictionary.entries[index]
+                        entry = entries_by_index[index]
                         misc_tags = self._get_misc_tags(entry)
 
                         passes_filter = not entry['kebs'] or 'uk' in misc_tags or 'ek' in misc_tags
@@ -182,7 +192,7 @@ class Lookup(threading.Thread):
                     entry_indices = filtered_indices
 
                 for index in set(entry_indices):
-                    current_prefix_results.append((self.dictionary.entries[index], form, len(prefix)))
+                    current_prefix_results.append((entries_by_index[index], form, len(prefix)))
 
             if current_prefix_results:
                 if not found_primary_match:
@@ -199,9 +209,10 @@ class Lookup(threading.Thread):
 
         results = self._format_and_sort_results(list(all_found_entries.values()), truncated_lookup)
 
-        self.lookup_cache[truncated_lookup] = results[:MAX_DICT_ENTRIES]
-        if len(self.lookup_cache) > self.CACHE_SIZE:
-            self.lookup_cache.popitem(last=False)
+        with self._cache_lock:
+            self.lookup_cache[truncated_lookup] = results[:MAX_DICT_ENTRIES]
+            if len(self.lookup_cache) > self.CACHE_SIZE:
+                self.lookup_cache.popitem(last=False)
 
         return results[:MAX_DICT_ENTRIES]
 
@@ -309,7 +320,8 @@ class Lookup(threading.Thread):
                     "deconjugation_process": form.process,
                     "priority": priority,
                     "match_len": match_len,
-                    "matched_text": original_lookup[:match_len] if match_len else ""
+                    "matched_text": original_lookup[:match_len] if match_len else "",
+                    "pitch_accents": list(self.dictionary.pitch_map.get(merge_key, []))
                 }
             else:
                 current_entry = merged_entries[merge_key]

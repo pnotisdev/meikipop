@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 IMAGE_CACHE_DIR = os.path.join(os.getcwd(), 'data', 'images')
 os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
 
+# Ensure audio cache directory exists (extracted media from Yomitan 'audio' term_meta dictionaries)
+AUDIO_CACHE_DIR = os.path.join(os.getcwd(), 'data', 'audio')
+os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+
 class YomichanImportError(Exception):
     pass
 
@@ -374,20 +378,22 @@ def _extract_text_recursive(item: Any) -> str:
             return _extract_text_recursive(item['content'])
     return ""
 
-def parse_yomichan_zip(zip_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
+def parse_yomichan_zip(zip_path: str) -> Tuple[List[Dict[str, Any]], Dict, Dict, Dict]:
     """
     Parses a Yomichan/Yomitan dictionary ZIP file and returns a list of entries
-    formatted for the internal Dictionary class.
+    formatted for the internal Dictionary class, plus frequency, pitch-accent, and audio maps.
     """
     entries = []
     frequency_map = {}
+    pitch_map = {}
+    audio_map = {}
     
     try:
         with zipfile.ZipFile(zip_path, 'r') as z:
             # Check for index.json to verify it's a valid dictionary
             if 'index.json' not in z.namelist():
                 logger.warning(f"Skipping {zip_path}: index.json not found")
-                return [], {}
+                return [], {}, {}, {}
 
             with z.open('index.json') as f:
                 index = json.load(f)
@@ -438,6 +444,29 @@ def parse_yomichan_zip(zip_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
                     logger.error(f"Failed to extract image {rel_path}: {e}")
                     return ""
 
+            # Setup audio handler (extracts embedded media referenced by 'audio' term_meta entries)
+            def audio_handler(rel_path: str) -> str:
+                try:
+                    safe_name = hashlib.md5(f"{title}:{rel_path}".encode('utf-8')).hexdigest()
+                    ext = os.path.splitext(rel_path)[1].lower() or '.mp3'
+                    target_path = os.path.join(AUDIO_CACHE_DIR, safe_name + ext)
+
+                    if os.path.exists(target_path):
+                        return target_path
+
+                    try:
+                        with z.open(rel_path) as source:
+                            audio_data = source.read()
+                    except KeyError:
+                        return ""
+
+                    with open(target_path, 'wb') as f:
+                        f.write(audio_data)
+                    return target_path
+                except Exception as e:
+                    logger.error(f"Failed to extract audio {rel_path}: {e}")
+                    return ""
+
             converter = YomichanConverter(image_handler)
 
             # Iterate over term_bank files
@@ -453,9 +482,11 @@ def parse_yomichan_zip(zip_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
                     with z.open(filename) as f:
                         meta_bank = json.load(f)
                         for item in meta_bank:
-                            if isinstance(item, list) and len(item) >= 3 and item[1] == 'freq':
-                                term = item[0]
-                                data = item[2]
+                            if not (isinstance(item, list) and len(item) >= 3):
+                                continue
+                            term = item[0]
+                            data = item[2]
+                            if item[1] == 'freq':
                                 reading = ""
                                 if isinstance(data, dict):
                                     reading = data.get('reading', "")
@@ -463,28 +494,51 @@ def parse_yomichan_zip(zip_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
                                     if 'frequency' in data:
                                          freq_val = data['frequency']
                                     frequency_map[(term, reading)] = freq_val
+                            elif item[1] == 'pitch' and isinstance(data, dict):
+                                reading = data.get('reading', "")
+                                positions = [p.get('position') for p in data.get('pitches', []) if isinstance(p, dict) and isinstance(p.get('position'), int)]
+                                if positions:
+                                    key = (term, reading)
+                                    pitch_map[key] = sorted(set(pitch_map.get(key, []) + positions))
+                            elif item[1] == 'audio' and isinstance(data, dict):
+                                reading = data.get('reading', "")
+                                key = (term, reading)
+                                for src in data.get('audioSources', []):
+                                    if not isinstance(src, dict):
+                                        continue
+                                    try:
+                                        if src.get('type') == 'file' and src.get('path'):
+                                            local_path = audio_handler(src['path'])
+                                            if local_path:
+                                                audio_map.setdefault(key, []).append(local_path)
+                                        elif src.get('type') == 'url' and src.get('url'):
+                                            audio_map.setdefault(key, []).append(src['url'])
+                                    except Exception as e:
+                                        logger.debug(f"Skipping malformed audio source for {term}: {e}")
                                 
     except zipfile.BadZipFile:
         logger.error(f"Failed to read {zip_path}: Bad ZIP file")
     except Exception as e:
         logger.error(f"Error importing {zip_path}: {e}")
 
-    return entries, frequency_map
+    return entries, frequency_map, pitch_map, audio_map
 
-def parse_yomichan_dir(dir_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
+def parse_yomichan_dir(dir_path: str) -> Tuple[List[Dict[str, Any]], Dict, Dict, Dict]:
     """
     Parses a Yomichan/Yomitan dictionary directory and returns a list of entries
-    formatted for the internal Dictionary class.
+    formatted for the internal Dictionary class, plus frequency, pitch-accent, and audio maps.
     """
     entries = []
     frequency_map = {}
+    pitch_map = {}
+    audio_map = {}
     
     try:
         # Check for index.json to verify it's a valid dictionary
         index_path = os.path.join(dir_path, 'index.json')
         if not os.path.exists(index_path):
             logger.warning(f"Skipping {dir_path}: index.json not found")
-            return [], {}
+            return [], {}, {}, {}
 
         with open(index_path, 'r', encoding='utf-8') as f:
             index = json.load(f)
@@ -529,6 +583,26 @@ def parse_yomichan_dir(dir_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
                 logger.error(f"Failed to process image {rel_path}: {e}")
                 return ""
 
+        # Setup audio handler (copies embedded media referenced by 'audio' term_meta entries)
+        def audio_handler(rel_path: str) -> str:
+            try:
+                full_source_path = os.path.join(dir_path, rel_path)
+                if not os.path.exists(full_source_path):
+                    return ""
+
+                safe_name = hashlib.md5(f"{title}:{rel_path}".encode('utf-8')).hexdigest()
+                ext = os.path.splitext(rel_path)[1].lower() or '.mp3'
+                target_path = os.path.join(AUDIO_CACHE_DIR, safe_name + ext)
+
+                if os.path.exists(target_path):
+                    return target_path
+
+                shutil.copy2(full_source_path, target_path)
+                return target_path
+            except Exception as e:
+                logger.error(f"Failed to process audio {rel_path}: {e}")
+                return ""
+
         converter = YomichanConverter(image_handler)
 
         # Iterate over term_bank files
@@ -546,9 +620,11 @@ def parse_yomichan_dir(dir_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     meta_bank = json.load(f)
                     for item in meta_bank:
-                        if isinstance(item, list) and len(item) >= 3 and item[1] == 'freq':
-                            term = item[0]
-                            data = item[2]
+                        if not (isinstance(item, list) and len(item) >= 3):
+                            continue
+                        term = item[0]
+                        data = item[2]
+                        if item[1] == 'freq':
                             reading = ""
                             if isinstance(data, dict):
                                 reading = data.get('reading', "")
@@ -556,11 +632,32 @@ def parse_yomichan_dir(dir_path: str) -> Tuple[List[Dict[str, Any]], Dict]:
                                 if 'frequency' in data:
                                      freq_val = data['frequency']
                                 frequency_map[(term, reading)] = freq_val
+                        elif item[1] == 'pitch' and isinstance(data, dict):
+                            reading = data.get('reading', "")
+                            positions = [p.get('position') for p in data.get('pitches', []) if isinstance(p, dict) and isinstance(p.get('position'), int)]
+                            if positions:
+                                key = (term, reading)
+                                pitch_map[key] = sorted(set(pitch_map.get(key, []) + positions))
+                        elif item[1] == 'audio' and isinstance(data, dict):
+                            reading = data.get('reading', "")
+                            key = (term, reading)
+                            for src in data.get('audioSources', []):
+                                if not isinstance(src, dict):
+                                    continue
+                                try:
+                                    if src.get('type') == 'file' and src.get('path'):
+                                        local_path = audio_handler(src['path'])
+                                        if local_path:
+                                            audio_map.setdefault(key, []).append(local_path)
+                                    elif src.get('type') == 'url' and src.get('url'):
+                                        audio_map.setdefault(key, []).append(src['url'])
+                                except Exception as e:
+                                    logger.debug(f"Skipping malformed audio source for {term}: {e}")
                                 
     except Exception as e:
         logger.error(f"Error importing {dir_path}: {e}")
 
-    return entries, frequency_map
+    return entries, frequency_map, pitch_map, audio_map
 
 # Keep _convert_yomichan_entry for backward compatibility if imported elsewhere, 
 # but redirect to class

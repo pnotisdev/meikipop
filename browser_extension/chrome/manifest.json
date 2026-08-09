@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "meikipop Mining Bridge",
+  "version": "0.1.0",
+  "description": "Experimental: mines subtitle text + a video frame + a short tab-audio clip from the current tab (YouTube, Netflix, any <video>) straight into meikipop for dictionary lookup and Anki card creation.",
+  "permissions": ["tabCapture", "storage", "activeTab", "scripting"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "meikipop Mining Bridge",
+    "default_popup": "options.html"
+  },
+  "options_page": "options.html"
+}
