@@ -19,6 +19,11 @@ class ScreenManager(threading.Thread):
         self.monitor = None
         self.last_ocr_put_time = 0.0
         self.last_screenshot = None
+        # A single mss instance is reused for the life of this thread instead of being
+        # recreated on every screenshot - mss's own docs recommend one instance per
+        # thread since construction re-initializes the OS capture backend (GDI/DXGI
+        # on Windows) each time, which is wasted work at the 5-20Hz this loop runs at.
+        self._sct = None
         if config.scan_region == "region":
             self.set_scan_region()
         else:
@@ -73,12 +78,18 @@ class ScreenManager(threading.Thread):
             except:
                 logger.exception("An unexpected error occurred in the screenshot loop. Continuing...")
                 self._sleep_and_handle_loop_exit(1)
+        if self._sct is not None:
+            self._sct.close()
         logger.debug("Screenshot thread stopped.")
 
     def take_screenshot(self):
-        with mss.mss() as sct:
-            sct_img = sct.grab(self.monitor)
-            return sct_img
+        if self.monitor is None:
+            raise RuntimeError("No scan region configured. Please set a scan region before taking a screenshot.")
+        # Lazily created on first use so it's always initialized from this thread
+        # (this method only ever runs on the ScreenManager thread itself).
+        if self._sct is None:
+            self._sct = mss.mss()
+        return self._sct.grab(self.monitor)
 
     def set_scan_region(self):
         scan_rect = RegionSelector.get_region()

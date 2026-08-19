@@ -52,6 +52,11 @@ class GoogleLensOcrV2(OcrProvider):
                 processed_image.save(bio, format='PNG')
                 return bio.getvalue(), image.width, image.height
 
+    # (connect, read) timeout tuple: bounds worst-case latency per attempt to ~13s
+    # instead of the ambiguous ~10-20s a single float timeout can produce depending
+    # on where in the request it stalls.
+    REQUEST_TIMEOUT = (3.05, 10)
+
     def scan(self, image: Image.Image) -> Optional[List[Paragraph]]:
         start_time = time.perf_counter()
         image_bytes, final_width, final_height = self._process_image_for_upload(image)
@@ -60,19 +65,38 @@ class GoogleLensOcrV2(OcrProvider):
         request.objects_request.image_data.payload.image_bytes = image_bytes
         request.objects_request.image_data.image_metadata.width = final_width
         request.objects_request.image_data.image_metadata.height = final_height
+        payload = request.SerializeToString()
+
+        request_duration = time.perf_counter() - start_time
+        logger.debug(f"Request created in {request_duration:.2f}s. Sending screenshot for OCR...")
+
+        # One retry for transient connection-level failures only (dropped keep-alive,
+        # DNS blip, connect timeout). Deliberately NOT retried: HTTP error responses
+        # (e.g. 429/5xx) - hammering an already-struggling/rate-limited endpoint would
+        # make things worse, so those just fail this attempt and let the caller's
+        # normal retry cadence (next screenshot trigger) handle it.
+        for attempt in range(2):
+            try:
+                start_time_req = time.perf_counter()
+                response = self._session.post(
+                    'https://lensfrontend-pa.googleapis.com/v1/crupload',
+                    data=payload, timeout=self.REQUEST_TIMEOUT
+                )
+                network_duration = time.perf_counter() - start_time_req
+                response.raise_for_status()
+                logger.debug(f"OCR response received in {network_duration:.2f}s. Processing...")
+                break
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt == 0:
+                    logger.debug(f"OCR request failed ({e}); retrying once...")
+                    continue
+                logger.error("OCR Request Failed after retry: %s", e)
+                return None
+            except requests.RequestException as e:
+                logger.error("OCR Request Failed: %s", e)
+                return None
 
         try:
-            request_duration = time.perf_counter() - start_time
-            logger.debug(f"Request created in {request_duration:.2f}s. Sending screenshot for OCR...")
-            start_time_req = time.perf_counter()
-            response = self._session.post(
-                'https://lensfrontend-pa.googleapis.com/v1/crupload',
-                data=request.SerializeToString(), timeout=10
-            )
-            network_duration = time.perf_counter() - start_time_req
-            response.raise_for_status()
-            logger.debug(f"OCR response received in {network_duration:.2f}s. Processing...")
-
             glens_response = LensOverlayServerResponse().FromString(response.content)
 
             raw_lines = []
@@ -114,6 +138,6 @@ class GoogleLensOcrV2(OcrProvider):
 
             return group_lines_into_paragraphs(raw_lines)
 
-        except requests.RequestException as e:
-            logger.error("OCR Request Failed: %s", e)
+        except Exception as e:
+            logger.error("Failed to parse OCR response: %s", e, exc_info=True)
             return None

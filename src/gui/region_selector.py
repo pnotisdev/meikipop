@@ -2,12 +2,19 @@
 import logging
 
 from PyQt6.QtCore import Qt, QPoint, QRect, QTimer
-from PyQt6.QtGui import QColor, QPainter, QPen, QMouseEvent, QKeyEvent, QGuiApplication, QCursor
+from PyQt6.QtGui import QColor, QPainter, QPen, QFont, QMouseEvent, QKeyEvent, QGuiApplication, QCursor
 from PyQt6.QtWidgets import QDialog
 
 from src.gui.input import InputLoop
 
 logger = logging.getLogger(__name__)
+
+# meikiocr's text detector has a fixed 960x544 input: regions much larger than that get
+# heavily downscaled before detection, which can hurt accuracy on small manga/VN text.
+# Google Lens has no such hard limit, but a tight region still means less to upload and
+# less background noise for it to sift through, so the hint applies regardless of provider.
+_LARGE_REGION_WIDTH = 1440
+_LARGE_REGION_HEIGHT = 816
 
 class RegionSelector(QDialog):
     def __init__(self, parent=None):
@@ -30,6 +37,7 @@ class RegionSelector(QDialog):
 
         # Points for the final result (in physical coordinates)
         self.begin_physical = None
+        self.end_physical = None
         self.selection_rect = None
 
         self.has_selection_started = False
@@ -58,6 +66,38 @@ class RegionSelector(QDialog):
             border_rect = rect_logical.adjusted(0, 0, -1, -1)
             painter.drawRect(border_rect)
 
+            self._draw_size_readout(painter, rect_logical)
+
+    def _draw_size_readout(self, painter: QPainter, rect_logical: QRect):
+        if not self.begin_physical or not self.end_physical:
+            return
+
+        width = abs(self.end_physical.x() - self.begin_physical.x())
+        height = abs(self.end_physical.y() - self.begin_physical.y())
+        if width == 0 or height == 0:
+            return
+
+        text = f"{width} x {height} px"
+        is_large = width > _LARGE_REGION_WIDTH or height > _LARGE_REGION_HEIGHT
+        if is_large:
+            text += "  (tip: a tighter region OCRs more accurately)"
+
+        font = QFont()
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(255, 210, 90) if is_large else QColor(230, 230, 230)))
+
+        metrics = painter.fontMetrics()
+        text_width = metrics.horizontalAdvance(text)
+        label_x = max(0, min(rect_logical.left(), self.width() - text_width - 8))
+        label_y = rect_logical.top() - 8
+        if label_y < metrics.height():
+            label_y = rect_logical.bottom() + metrics.height() + 4
+
+        painter.fillRect(label_x - 4, label_y - metrics.ascent() - 2, text_width + 8,
+                          metrics.height() + 4, QColor(0, 0, 0, 160))
+        painter.drawText(label_x, label_y, text)
+
     def mousePressEvent(self, event: QMouseEvent):
         logger.debug("RegionSelector: mousePressEvent")
         self.begin_logical = QCursor.pos()
@@ -68,6 +108,7 @@ class RegionSelector(QDialog):
         # Store the physical position for the final result
         px, py = InputLoop.get_mouse_pos()
         self.begin_physical = QPoint(px, py)
+        self.end_physical = QPoint(px, py)
 
         self.has_selection_started = True
         self.update()
@@ -83,6 +124,8 @@ class RegionSelector(QDialog):
             return
 
         self.end_logical = mouse_pos
+        px, py = InputLoop.get_mouse_pos()
+        self.end_physical = QPoint(px, py)
         self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):

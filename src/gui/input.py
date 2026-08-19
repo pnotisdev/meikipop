@@ -21,6 +21,11 @@ else:
 
 logger = logging.getLogger(__name__)
 
+# Shared across all callers (including the static get_mouse_pos helper) so we don't
+# pay for a fresh pynput Controller - and its underlying OS handles - on every single
+# hit-scan/mouse-move check.
+_shared_mouse_controller = mouse.Controller()
+
 class LinuxX11KeyboardController:
     def __init__(self, hotkey_str):
         self.hotkey_str = hotkey_str.lower()
@@ -131,7 +136,7 @@ class InputLoop(threading.Thread):
     def __init__(self, shared_state):
         super().__init__(daemon=True, name="InputLoop")
         self.shared_state = shared_state
-        self.mouse_controller = mouse.Controller()
+        self.mouse_controller = _shared_mouse_controller
 
         self.hotkey_str = config.hotkey.lower()
         if IS_LINUX:
@@ -204,7 +209,6 @@ class InputLoop(threading.Thread):
 
     @staticmethod
     def get_mouse_pos():
-        with mouse.Controller() as mc:
-            pos = mc.position
-            # Convert floats to integers for QPoint compatibility
-            return (int(pos[0]), int(pos[1]))
+        pos = _shared_mouse_controller.position
+        # Convert floats to integers for QPoint compatibility
+        return (int(pos[0]), int(pos[1]))

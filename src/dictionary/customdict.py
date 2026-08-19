@@ -6,7 +6,7 @@ import time
 import os
 import sqlite3
 import concurrent.futures
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from typing import List, Any
 
 from src.config.config import IS_WINDOWS, config
@@ -34,6 +34,13 @@ class CompactEntry:
     def __setitem__(self, key, value):
         setattr(self, key, value)
 
+# Sentinel distinguishing "looked up and confirmed absent from the DB" from "not yet
+# cached", so a cached miss can still honor whatever `default` a given call passes in
+# (SqliteLookupMap.get mirrors dict.get's per-call default arg) instead of baking in
+# whatever the first caller happened to ask for.
+_NOT_FOUND = object()
+
+
 class SqliteEntryList:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
@@ -41,6 +48,14 @@ class SqliteEntryList:
         # Cache the length
         self.cursor.execute("SELECT COUNT(*) FROM entries")
         self._len = self.cursor.fetchone()[0]
+        # Entries are immutable for the lifetime of this connection (a dictionary
+        # reload builds a brand new Dictionary/connection from scratch), so a bounded
+        # LRU is safe here and avoids a cursor+SELECT+unpickle round trip on every
+        # access - lookup.py alone fetches the same index twice per candidate, and
+        # every new word hovered during normal reading is a cache miss further up in
+        # Lookup's own result cache, so this is the common path, not the rare one.
+        self._cache = OrderedDict()
+        self._cache_max = 8192
 
     def __len__(self):
         return self._len
@@ -48,13 +63,21 @@ class SqliteEntryList:
     def __getitem__(self, index):
         if index < 0 or index >= self._len:
             raise IndexError("list index out of range")
-        
+
+        if index in self._cache:
+            self._cache.move_to_end(index)
+            return self._cache[index]
+
         # Fetch blob
         cursor = self.conn.cursor()
         cursor.execute("SELECT data FROM entries WHERE id = ?", (index,))
         row = cursor.fetchone()
         if row:
-            return pickle.loads(row[0])
+            entry = pickle.loads(row[0])
+            self._cache[index] = entry
+            if len(self._cache) > self._cache_max:
+                self._cache.popitem(last=False)
+            return entry
         raise IndexError(f"Entry {index} not found in DB")
 
     def __iter__(self):
@@ -70,14 +93,27 @@ class SqliteLookupMap:
     def __init__(self, conn: sqlite3.Connection, table_name: str):
         self.conn = conn
         self.table_name = table_name
+        # Same reasoning as SqliteEntryList: content is immutable for this
+        # connection's lifetime, and misses are worth caching too since the
+        # lookup algorithm tries many candidate prefixes/forms that don't exist.
+        self._cache = OrderedDict()
+        self._cache_max = 4096
 
     def get(self, key: str, default=None):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            cached = self._cache[key]
+            return default if cached is _NOT_FOUND else cached
+
         cursor = self.conn.cursor()
         cursor.execute(f"SELECT entry_ids FROM {self.table_name} WHERE text = ?", (key,))
         row = cursor.fetchone()
-        if row:
-            return pickle.loads(row[0])
-        return default
+        result = pickle.loads(row[0]) if row else _NOT_FOUND
+
+        self._cache[key] = result
+        if len(self._cache) > self._cache_max:
+            self._cache.popitem(last=False)
+        return default if result is _NOT_FOUND else result
 
 class Dictionary:
     def __init__(self):

@@ -43,7 +43,9 @@ class Config:
                 'enabled_dictionaries': '',
                 'enable_jmdict': 'true',
                 'max_popup_width': '500',
-                'max_popup_height': '400'
+                'max_popup_height': '400',
+                'meikiocr_det_threshold': '0.5',
+                'meikiocr_rec_threshold': '0.1'
             },
             'Theme': {
                 'theme_name': 'Nazeka',
@@ -109,6 +111,8 @@ class Config:
         self.enable_jmdict = config.getboolean('Settings', 'enable_jmdict', fallback=True)
         self.max_popup_width = config.getint('Settings', 'max_popup_width', fallback=500)
         self.max_popup_height = config.getint('Settings', 'max_popup_height', fallback=400)
+        self.meikiocr_det_threshold = config.getfloat('Settings', 'meikiocr_det_threshold', fallback=0.5)
+        self.meikiocr_rec_threshold = config.getfloat('Settings', 'meikiocr_rec_threshold', fallback=0.1)
         
         enabled_dicts_str = config.get('Settings', 'enabled_dictionaries', fallback=None)
         if enabled_dicts_str is None:
@@ -168,7 +172,9 @@ class Config:
             'enable_jmdict': str(self.enable_jmdict).lower(),
             'max_popup_width': str(self.max_popup_width),
             'max_popup_height': str(self.max_popup_height),
-            'magpie_compatibility': str(self.magpie_compatibility).lower()
+            'magpie_compatibility': str(self.magpie_compatibility).lower(),
+            'meikiocr_det_threshold': str(self.meikiocr_det_threshold),
+            'meikiocr_rec_threshold': str(self.meikiocr_rec_threshold)
         }
         config['Theme'] = {
             'theme_name': self.theme_name,

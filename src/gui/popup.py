@@ -142,24 +142,33 @@ class Popup(QWidget):
                 self._show_status_message(msg)
                 return
         
-        crop_rect = None
         if manual_crop:
+            # Give the popup time to actually disappear on screen before the
+            # region-selector overlay appears, without freezing the UI thread for
+            # it (a blocking time.sleep here used to stall the whole Qt event loop -
+            # including this widget's own 10ms update timer - for 200ms on every
+            # single Anki add).
             self.hide_popup()
-            QApplication.processEvents()
-            time.sleep(0.2)
-            logger.info("Launching region selector for manual crop")
-            crop_rect = RegionSelector.get_region()
-            logger.info(f"Region selector result: {crop_rect}")
-            if not crop_rect:
-                logger.info("Manual crop cancelled")
-                return
-            self.last_manual_crop_rect = crop_rect
-        else:
-            # Reuse last manual crop if user selects then presses Alt+A
-            crop_rect = self.last_manual_crop_rect
-        
+            QTimer.singleShot(200, lambda: self._launch_manual_crop_for_anki(latest_context, latest_data, dedup_tag))
+            return
+
+        # Reuse last manual crop if user selects then presses Alt+A
         logger.info("Spawning Anki add thread")
-        threading.Thread(target=self._add_to_anki_thread, args=(crop_rect, latest_context, latest_data, dedup_tag)).start()
+        threading.Thread(target=self._add_to_anki_thread,
+                          args=(self.last_manual_crop_rect, latest_context, latest_data, dedup_tag)).start()
+
+    def _launch_manual_crop_for_anki(self, latest_context, latest_data, dedup_tag):
+        logger.info("Launching region selector for manual crop")
+        crop_rect = RegionSelector.get_region()
+        logger.info(f"Region selector result: {crop_rect}")
+        if not crop_rect:
+            logger.info("Manual crop cancelled")
+            return
+        self.last_manual_crop_rect = crop_rect
+
+        logger.info("Spawning Anki add thread")
+        threading.Thread(target=self._add_to_anki_thread,
+                          args=(crop_rect, latest_context, latest_data, dedup_tag)).start()
 
     def _show_status_message(self, message: str, duration_ms: int = 2000):
         self.status_label.setText(message)
@@ -938,7 +947,7 @@ ruby:hover rt {
         self._last_latest_data = latest_data
         self._last_latest_context = latest_context
 
-        if self._latest_data and self.input_loop.is_virtual_hotkey_down():
+        if latest_data and self.input_loop.is_virtual_hotkey_down():
             self.show_popup()
             
             # Check for shortcuts

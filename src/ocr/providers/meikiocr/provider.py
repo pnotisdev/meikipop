@@ -8,15 +8,12 @@ from PIL import Image
 # Import the MeikiOCR library
 from meikiocr import MeikiOCR
 
+from src.config.config import config
 # Import the "contract" classes from your application's interface
 from src.ocr.interface import BoundingBox, OcrProvider, Paragraph, Word
+from src.ocr.providers.postprocessing import group_lines_into_paragraphs
 
 logger = logging.getLogger(__name__)
-
-# --- pipeline configuration ---
-# These thresholds are passed to the library's run_ocr method.
-DET_CONFIDENCE_THRESHOLD = 0.5
-REC_CONFIDENCE_THRESHOLD = 0.1
 
 JAPANESE_REGEX = re.compile(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]')
 
@@ -63,12 +60,19 @@ class MeikiOcrProvider(OcrProvider):
             # --- 1. Run the entire OCR pipeline with a single library call ---
             ocr_results = self.ocr_client.run_ocr(
                 image_np_bgr,
-                det_threshold=DET_CONFIDENCE_THRESHOLD,
-                rec_threshold=REC_CONFIDENCE_THRESHOLD
+                det_threshold=config.meikiocr_det_threshold,
+                rec_threshold=config.meikiocr_rec_threshold
             )
 
             # --- 2. Transform the library's output to MeikiPop's format ---
-            return self._to_meikipop_paragraphs(ocr_results, img_width, img_height)
+            raw_lines = self._to_meikipop_paragraphs(ocr_results, img_width, img_height)
+
+            # --- 3. Merge multi-line paragraphs and split out furigana, same as the
+            # other providers - meikiocr only detects individual lines, so without this
+            # step multi-line dialogue would be treated as unrelated paragraphs (breaking
+            # lookahead for lookups/deconjugation that span a line wrap) and furigana
+            # would be mixed in with the main text instead of being hit-tested separately.
+            return group_lines_into_paragraphs(raw_lines)
 
         except Exception as e:
             logger.error(f"an error occurred in {self.NAME}: {e}", exc_info=True)

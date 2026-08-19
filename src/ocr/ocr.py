@@ -15,10 +15,15 @@ from src.ocr.providers.glensv2 import GoogleLensOcrV2
 logger = logging.getLogger(__name__)  # Get the logger
 
 class OcrProcessor(threading.Thread):
+    # Cap on the backoff applied after consecutive OCR failures in auto-scan mode,
+    # so a struggling network backend doesn't get hammered at full speed.
+    MAX_FAILURE_BACKOFF_SECONDS = 5.0
+
     def __init__(self, shared_state):
         super().__init__(daemon=True, name="OcrProcessor")
         self.shared_state = shared_state
         self.ocr_backend: Optional[OcrProvider] = None
+        self._consecutive_failures = 0
 
         self.available_providers = self._discover_providers()
         if not self.available_providers:
@@ -38,11 +43,28 @@ class OcrProcessor(threading.Thread):
 
                 start_time = time.perf_counter()
                 ocr_result = self.ocr_backend.scan(screenshot)
-                logger.info(
-                    f"{self.ocr_backend.NAME} found {len(ocr_result) if ocr_result else 0} paragraphs in {(time.perf_counter() - start_time):.3f}s.")
-                # todo keep last ocr result?
+                elapsed = time.perf_counter() - start_time
 
-                self.shared_state.hit_scan_queue.put(ocr_result)
+                if ocr_result is None:
+                    # None means the scan itself failed (network hiccup, timeout,
+                    # exception, etc.) - NOT "no text found" (that's an empty list).
+                    # Don't forward this downstream: doing so would blank out the
+                    # popup and hit-scan cache even though the last-known text is
+                    # still perfectly valid and still on screen. Just leave
+                    # hit_scan_queue holding its last good value so hovering keeps
+                    # working off the last successful scan until the next one lands.
+                    self._consecutive_failures += 1
+                    logger.warning(
+                        f"{self.ocr_backend.NAME} scan failed after {elapsed:.3f}s "
+                        f"({self._consecutive_failures} in a row). Keeping last known text.")
+                    if config.auto_scan_mode:
+                        backoff = min(self._consecutive_failures * 0.5, self.MAX_FAILURE_BACKOFF_SECONDS)
+                        time.sleep(backoff)
+                else:
+                    self._consecutive_failures = 0
+                    logger.info(
+                        f"{self.ocr_backend.NAME} found {len(ocr_result)} paragraphs in {elapsed:.3f}s.")
+                    self.shared_state.hit_scan_queue.put(ocr_result)
             except:
                 logger.exception("An unexpected error occurred in the ocr loop. Continuing...")
             finally:

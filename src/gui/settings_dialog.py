@@ -84,7 +84,27 @@ class SettingsDialog(QDialog):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(['fast', 'balanced', 'quality'])
         self.quality_combo.setCurrentText(config.quality_mode)
+        self.quality_combo.setToolTip("Google Lens only: trades upload size/speed for image quality.")
         general_layout.addRow("Quality Mode:", self.quality_combo)
+        self.meikiocr_det_spin = QDoubleSpinBox()
+        self.meikiocr_det_spin.setRange(0.05, 0.95)
+        self.meikiocr_det_spin.setDecimals(2)
+        self.meikiocr_det_spin.setSingleStep(0.05)
+        self.meikiocr_det_spin.setValue(config.meikiocr_det_threshold)
+        self.meikiocr_det_spin.setToolTip(
+            "meikiocr only: minimum confidence to accept a detected text box.\n"
+            "Lower catches more (but fainter/smaller) text; higher rejects more false positives.")
+        general_layout.addRow("meikiocr Detection Threshold:", self.meikiocr_det_spin)
+        self.meikiocr_rec_spin = QDoubleSpinBox()
+        self.meikiocr_rec_spin.setRange(0.05, 0.95)
+        self.meikiocr_rec_spin.setDecimals(2)
+        self.meikiocr_rec_spin.setSingleStep(0.05)
+        self.meikiocr_rec_spin.setValue(config.meikiocr_rec_threshold)
+        self.meikiocr_rec_spin.setToolTip(
+            "meikiocr only: minimum confidence to accept a recognized character.\n"
+            "The default (0.1) is quite permissive; raise it if you're seeing garbled/wrong\n"
+            "characters, lower it if legitimate text is being dropped.")
+        general_layout.addRow("meikiocr Recognition Threshold:", self.meikiocr_rec_spin)
         self.max_lookup_spin = QSpinBox()
         self.max_lookup_spin.setRange(5, 100)
         self.max_lookup_spin.setValue(config.max_lookup_length)
@@ -303,6 +323,8 @@ class SettingsDialog(QDialog):
         # Update all other config values
         config.hotkey = self.hotkey_combo.currentText()
         config.quality_mode = self.quality_combo.currentText()
+        config.meikiocr_det_threshold = self.meikiocr_det_spin.value()
+        config.meikiocr_rec_threshold = self.meikiocr_rec_spin.value()
         config.max_lookup_length = self.max_lookup_spin.value()
         config.auto_scan_mode = self.auto_scan_check.isChecked()
         config.auto_scan_interval_seconds = self.auto_scan_interval_spin.value()
