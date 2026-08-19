@@ -1,10 +1,12 @@
 # customdict.py
+import hashlib
 import json
 import logging
 import pickle
 import time
 import os
 import sqlite3
+import zipfile
 import concurrent.futures
 from collections import defaultdict, OrderedDict
 from typing import List, Any
@@ -89,6 +91,23 @@ class SqliteEntryList:
             for row in rows:
                 yield pickle.loads(row[0])
 
+    def get_many(self, indices) -> dict:
+        """Batch-fetch entries by id in as few round-trips as possible."""
+        result = {}
+        indices = list(dict.fromkeys(indices))  # de-dup, preserve order
+        if not indices:
+            return result
+
+        cursor = self.conn.cursor()
+        CHUNK = 500  # stay under SQLite's default host-parameter limit
+        for start in range(0, len(indices), CHUNK):
+            chunk = indices[start:start + CHUNK]
+            placeholders = ",".join("?" for _ in chunk)
+            cursor.execute(f"SELECT id, data FROM entries WHERE id IN ({placeholders})", chunk)
+            for entry_id, data in cursor.fetchall():
+                result[entry_id] = pickle.loads(data)
+        return result
+
 class SqliteLookupMap:
     def __init__(self, conn: sqlite3.Connection, table_name: str):
         self.conn = conn
@@ -115,6 +134,50 @@ class SqliteLookupMap:
             self._cache.popitem(last=False)
         return default if result is _NOT_FOUND else result
 
+class MergedEntryList:
+    """Wraps a SqliteEntryList (base) + a plain list (extra) as a single indexable sequence."""
+    def __init__(self, sqlite_entries: 'SqliteEntryList', extra: list):
+        self._sqlite = sqlite_entries
+        self._extra = extra  # held by reference – grows as user dicts are added
+
+    def __len__(self):
+        return len(self._sqlite) + len(self._extra)
+
+    def __getitem__(self, index):
+        sqlite_len = len(self._sqlite)
+        if index < sqlite_len:
+            return self._sqlite[index]
+        return self._extra[index - sqlite_len]
+
+    def __iter__(self):
+        yield from self._sqlite
+        yield from self._extra
+
+    def get_many(self, indices) -> dict:
+        """Batch-fetch entries by index, splitting between the SQLite base and the in-memory extras."""
+        sqlite_len = len(self._sqlite)
+        sqlite_indices = [i for i in indices if i < sqlite_len]
+        extra_indices = [i for i in indices if i >= sqlite_len]
+
+        result = self._sqlite.get_many(sqlite_indices) if sqlite_indices else {}
+        for i in extra_indices:
+            result[i] = self._extra[i - sqlite_len]
+        return result
+
+
+class MergedLookupMap:
+    """Merges results from a SqliteLookupMap and a plain dict overlay."""
+    def __init__(self, sqlite_map: 'SqliteLookupMap', extra: dict):
+        self._sqlite = sqlite_map
+        self._extra = extra  # held by reference
+
+    def get(self, key: str, default=None):
+        sqlite_result = self._sqlite.get(key, [])
+        extra_result = self._extra.get(key, [])
+        combined = sqlite_result + extra_result
+        return combined if combined else default
+
+
 class Dictionary:
     def __init__(self):
         self.entries = []
@@ -124,6 +187,19 @@ class Dictionary:
         self.priority_map = {}
         self.frequency_map = {}
         self._is_loaded = False
+        # User-dict entries appended after the base dict (used when base is SQLite-backed)
+        self._extra_entries: list = []
+        self._extra_lookup_kan: dict = defaultdict(list)
+        self._extra_lookup_kana: dict = defaultdict(list)
+        self._sqlite_mode: bool = False
+        self.pitch_map = {}
+        self.audio_map = {}
+
+    def get_entries_batch(self, indices) -> dict:
+        """Batch-fetch entries by index. Avoids one SQLite round-trip per index when in SQLite mode."""
+        if self._sqlite_mode:
+            return self.entries.get_many(indices)
+        return {i: self.entries[i] for i in dict.fromkeys(indices)}
 
     def import_jmdict_json(self, json_paths: list[str]):
         all_jmdict_entries = []
@@ -196,6 +272,8 @@ class Dictionary:
                 full_path = os.path.join(directory_path, filename)
                 if os.path.isdir(full_path):
                     futures.append(executor.submit(self._load_yomichan_folder_entries, full_path))
+                elif self._is_cedict_zip(full_path):
+                    futures.append(executor.submit(self._load_cedict_zip_entries, full_path))
                 else:
                     futures.append(executor.submit(self._load_yomichan_zip_entries, full_path))
             
@@ -219,6 +297,87 @@ class Dictionary:
         result = self._load_yomichan_folder_entries(dir_path)
         if result:
             self._add_entries(*result)
+
+    def _is_cedict_zip(self, zip_path: str) -> bool:
+        """Returns True if the ZIP is a CC-CEDICT file (contains a .u8 data file)."""
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                return any(name.endswith('.u8') for name in zf.namelist())
+        except Exception:
+            return False
+
+    def _load_cedict_zip_entries(self, zip_path: str):
+        cache_path = zip_path + ".cache.pkl"
+        cached = self._load_entries_from_cache(zip_path, cache_path)
+        if cached:
+            return cached, os.path.basename(zip_path) + " (Cached)"
+
+        result = self._parse_cedict_zip(zip_path)
+        if result:
+            self._save_to_cache(result, cache_path)
+            return result, os.path.basename(zip_path)
+        return None
+
+    def _parse_cedict_zip(self, zip_path: str):
+        """
+        Parses a CC-CEDICT ZIP file and returns (entries_list, frequency_map).
+        CC-CEDICT line format:  Traditional Simplified [pin1 yin1] /def1/def2/
+        Both traditional and simplified forms are indexed in lookup_kan so that
+        either script triggers a popup hit.
+        """
+        entries = []
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                u8_files = [n for n in zf.namelist() if n.endswith('.u8')]
+                if not u8_files:
+                    return None
+                with zf.open(u8_files[0]) as f:
+                    for raw_line in f:
+                        line = raw_line.decode('utf-8', errors='replace').strip()
+                        if not line or line.startswith('#'):
+                            continue
+                        bracket_start = line.find('[')
+                        bracket_end = line.find(']')
+                        if bracket_start < 0 or bracket_end < 0:
+                            continue
+                        heading = line[:bracket_start].strip().split()
+                        if len(heading) < 2:
+                            continue
+                        traditional = heading[0]
+                        simplified = heading[1]
+                        pinyin = line[bracket_start + 1:bracket_end].strip()
+                        defs_part = line[bracket_end + 1:].strip()
+                        if not defs_part.startswith('/') or not defs_part.endswith('/'):
+                            continue
+                        definitions = [d.strip() for d in defs_part[1:-1].split('/') if d.strip()]
+                        if not definitions:
+                            continue
+
+                        entry_id = int(hashlib.sha256(
+                            f"{traditional}:{simplified}:{pinyin}".encode('utf-8')
+                        ).hexdigest()[:8], 16)
+
+                        # Index both traditional and simplified so either triggers a lookup
+                        kebs = [traditional]
+                        if simplified != traditional:
+                            kebs.append(simplified)
+                        rebs = [pinyin] if pinyin else []
+
+                        entries.append({
+                            'id': entry_id,
+                            'kebs': kebs,
+                            'rebs': rebs,
+                            'senses': [{'glosses': definitions, 'pos': []}],
+                            'raw_k_ele': [{'keb': k, 'pri': []} for k in kebs],
+                            'raw_r_ele': [{'reb': r, 'restr': [], 'pri': []} for r in rebs],
+                            'raw_sense': [{'misc': [], 'pos': [], 'gloss': definitions}],
+                            'source': 'CC-CEDICT',
+                        })
+            logger.info(f"Parsed {len(entries)} entries from CC-CEDICT: {os.path.basename(zip_path)}")
+            return entries, {}
+        except Exception as e:
+            logger.error(f"Failed to parse CC-CEDICT zip {zip_path}: {e}", exc_info=True)
+            return None
 
     def _load_yomichan_zip_entries(self, zip_path: str):
         cache_path = zip_path + ".cache.pkl"
@@ -244,14 +403,27 @@ class Dictionary:
             return result, os.path.basename(dir_path)
         return None
 
+    def _get_latest_mtime(self, path: str) -> float:
+        """Returns the newest modification time of path itself, or of any file within it if it's a directory."""
+        if os.path.isfile(path):
+            return os.path.getmtime(path)
+        latest = os.path.getmtime(path)
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    latest = max(latest, os.path.getmtime(os.path.join(root, f)))
+                except OSError:
+                    continue
+        return latest
+
     def _load_entries_from_cache(self, source_path: str, cache_path: str) -> tuple | None:
         """Attempts to load entries from cache. Returns entries if successful, else None."""
         if not os.path.exists(cache_path):
             return None
         
         try:
-            # Check modification times
-            source_mtime = os.path.getmtime(source_path)
+            # Check modification times (recurses into directories so edited term banks invalidate the cache)
+            source_mtime = self._get_latest_mtime(source_path)
             cache_mtime = os.path.getmtime(cache_path)
             
             if source_mtime > cache_mtime:
@@ -287,12 +459,22 @@ class Dictionary:
         except Exception as e:
             logger.error(f"Failed to save cache {cache_path}: {e}")
 
+    def _normalize_dict_data(self, data):
+        """Normalizes (entries[, frequency_map[, pitch_map[, audio_map]]]) tuples/lists from any dict source/cache version."""
+        if isinstance(data, list):
+            return data, {}, {}, {}
+        if len(data) >= 4:
+            return data[0], data[1], data[2], data[3]
+        if len(data) == 3:
+            return data[0], data[1], data[2], {}
+        return data[0], data[1], {}, {}
+
     def _add_entries(self, data: tuple, source_name: str):
         """Helper to add entries to the dictionary and update lookups."""
-        new_entries, frequency_map = data
-        
-        start_index = len(self.entries)
-        
+        new_entries, frequency_map, pitch_map, audio_map = self._normalize_dict_data(data)
+
+        sqlite_mode = self._sqlite_mode
+
         # Convert dict entries to CompactEntry if needed
         compact_entries = []
         for entry in new_entries:
@@ -303,21 +485,39 @@ class Dictionary:
                 ))
             else:
                 compact_entries.append(entry)
-                
-        self.entries.extend(compact_entries)
-        
-        # Update lookups
-        for i, entry in enumerate(compact_entries):
-            real_index = start_index + i
-            for keb in entry.kebs:
-                self.lookup_kan[keb].append(real_index)
-            for reb in entry.rebs:
-                self.lookup_kana[reb].append(real_index)
-        
+
+        if sqlite_mode:
+            # Base dict lives in SQLite (read-only). Extra entries go into a plain list.
+            # Indices for extra entries start after the SQLite base + any already-added extras.
+            start_index = len(self.entries) + len(self._extra_entries)
+            self._extra_entries.extend(compact_entries)
+            for i, entry in enumerate(compact_entries):
+                real_index = start_index + i
+                for keb in entry.kebs:
+                    self._extra_lookup_kan[keb].append(real_index)
+                for reb in entry.rebs:
+                    self._extra_lookup_kana[reb].append(real_index)
+        else:
+            start_index = len(self.entries)
+            self.entries.extend(compact_entries)
+            for i, entry in enumerate(compact_entries):
+                real_index = start_index + i
+                for keb in entry.kebs:
+                    self.lookup_kan[keb].append(real_index)
+                for reb in entry.rebs:
+                    self.lookup_kana[reb].append(real_index)
+
         if frequency_map:
             self.frequency_map.update(frequency_map)
-        
-        logger.info(f"Imported {len(new_entries)} entries and {len(frequency_map)} frequency items from {source_name}")
+
+        if pitch_map:
+            self.pitch_map.update(pitch_map)
+
+        if audio_map:
+            for key, sources in audio_map.items():
+                self.audio_map.setdefault(key, []).extend(sources)
+
+        logger.info(f"Imported {len(new_entries)} entries, {len(frequency_map)} frequency items, {len(pitch_map)} pitch items, and {len(audio_map)} audio items from {source_name}")
 
     def save_dictionary(self, file_path: str):
         data_to_save = {'entries': self.entries, 'lookup_kan': self.lookup_kan, 'lookup_kana': self.lookup_kana, 'deconjugator_rules': self.deconjugator_rules, 'priority_map': self.priority_map, 'frequency_map': self.frequency_map}
@@ -441,9 +641,11 @@ class Dictionary:
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             
             if config.enable_jmdict:
-                self.entries = SqliteEntryList(self.conn)
-                self.lookup_kan = SqliteLookupMap(self.conn, "lookup_kan")
-                self.lookup_kana = SqliteLookupMap(self.conn, "lookup_kana")
+                sqlite_entries = SqliteEntryList(self.conn)
+                self.entries = MergedEntryList(sqlite_entries, self._extra_entries)
+                self.lookup_kan = MergedLookupMap(SqliteLookupMap(self.conn, "lookup_kan"), self._extra_lookup_kan)
+                self.lookup_kana = MergedLookupMap(SqliteLookupMap(self.conn, "lookup_kana"), self._extra_lookup_kana)
+                self._sqlite_mode = True
             else:
                 self.entries = []
                 self.lookup_kan = defaultdict(list)

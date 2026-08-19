@@ -45,7 +45,9 @@ class Config:
                 'max_popup_width': '500',
                 'max_popup_height': '400',
                 'meikiocr_det_threshold': '0.5',
-                'meikiocr_rec_threshold': '0.1'
+                'meikiocr_rec_threshold': '0.1',
+                'enable_sentence_audio_capture': 'false',
+                'sentence_audio_duration_seconds': '8.0'
             },
             'Theme': {
                 'theme_name': 'Nazeka',
@@ -57,6 +59,7 @@ class Config:
                 'show_pos': 'false',
                 'show_tags': 'false',
                 'show_frequency': 'false',
+                'show_pitch_accent': 'false',
                 'color_background': '#2E2E2E',
                 'color_foreground': '#F0F0F0',
                 'color_highlight_word': '#88D8FF',
@@ -80,7 +83,15 @@ class Config:
                 'field_audio': '',
                 'field_sentence_audio': '',
                 'field_picture': '',
-                'field_frequency': ''
+                'field_frequency': '',
+                'field_pitch': ''
+            },
+            'Bridge': {
+                # Local mining bridge for the companion browser extension (YouTube/video subtitle+screenshot+audio mining).
+                # Disabled by default: enabling it opens a loopback-only HTTP server on your machine.
+                'enabled': 'false',
+                'port': '8850',
+                'token': ''
             }
         }
         config.read_dict(defaults)
@@ -113,6 +124,8 @@ class Config:
         self.max_popup_height = config.getint('Settings', 'max_popup_height', fallback=400)
         self.meikiocr_det_threshold = config.getfloat('Settings', 'meikiocr_det_threshold', fallback=0.5)
         self.meikiocr_rec_threshold = config.getfloat('Settings', 'meikiocr_rec_threshold', fallback=0.1)
+        self.enable_sentence_audio_capture = config.getboolean('Settings', 'enable_sentence_audio_capture', fallback=False)
+        self.sentence_audio_duration_seconds = config.getfloat('Settings', 'sentence_audio_duration_seconds', fallback=8.0)
         
         enabled_dicts_str = config.get('Settings', 'enabled_dictionaries', fallback=None)
         if enabled_dicts_str is None:
@@ -129,6 +142,7 @@ class Config:
         self.show_pos = config.getboolean('Theme', 'show_pos')
         self.show_tags = config.getboolean('Theme', 'show_tags')
         self.show_frequency = config.getboolean('Theme', 'show_frequency', fallback=False)
+        self.show_pitch_accent = config.getboolean('Theme', 'show_pitch_accent', fallback=False)
         self.color_background = config.get('Theme', 'color_background')
         self.color_foreground = config.get('Theme', 'color_foreground')
         self.color_highlight_word = config.get('Theme', 'color_highlight_word')
@@ -140,7 +154,7 @@ class Config:
         self.border_width = config.getint('Theme', 'border_width', fallback=1)
 
         self.anki_deck_name = config.get('Anki', 'deck_name', fallback='Default')
-        self.anki_model_name = config.get('Anki', 'model_name', fallback='Basic')
+        self.anki_model_name = config.get('Anki', 'model_name', fallback='Meikipop Card')
         self.anki_url = config.get('Anki', 'url', fallback='http://127.0.0.1:8765')
         self.anki_show_hover_status = config.getboolean('Anki', 'show_hover_status', fallback=False)
         self.anki_field_expression = config.get('Anki', 'field_expression', fallback='')
@@ -151,10 +165,25 @@ class Config:
         self.anki_field_sentence_audio = config.get('Anki', 'field_sentence_audio', fallback='')
         self.anki_field_picture = config.get('Anki', 'field_picture', fallback='')
         self.anki_field_frequency = config.get('Anki', 'field_frequency', fallback='')
+        self.anki_field_pitch = config.get('Anki', 'field_pitch', fallback='')
+
+        self.bridge_enabled = config.getboolean('Bridge', 'enabled', fallback=False)
+        self.bridge_port = config.getint('Bridge', 'port', fallback=8850)
+        self.bridge_token = config.get('Bridge', 'token', fallback='')
+        if not self.bridge_token:
+            import secrets
+            self.bridge_token = secrets.token_hex(16)
+            logger.info("Generated a new mining-bridge pairing token.")
+            self._bridge_token_is_new = True
+        else:
+            self._bridge_token_is_new = False
 
         self.is_enabled = True
 
         # todo command line args parsing
+
+        if self._bridge_token_is_new:
+            self.save()
 
     def save(self):
         config = configparser.ConfigParser()
@@ -174,7 +203,9 @@ class Config:
             'max_popup_height': str(self.max_popup_height),
             'magpie_compatibility': str(self.magpie_compatibility).lower(),
             'meikiocr_det_threshold': str(self.meikiocr_det_threshold),
-            'meikiocr_rec_threshold': str(self.meikiocr_rec_threshold)
+            'meikiocr_rec_threshold': str(self.meikiocr_rec_threshold),
+            'enable_sentence_audio_capture': str(self.enable_sentence_audio_capture).lower(),
+            'sentence_audio_duration_seconds': str(self.sentence_audio_duration_seconds)
         }
         config['Theme'] = {
             'theme_name': self.theme_name,
@@ -186,6 +217,7 @@ class Config:
             'show_pos': str(self.show_pos).lower(),
             'show_tags': str(self.show_tags).lower(),
             'show_frequency': str(self.show_frequency).lower(),
+            'show_pitch_accent': str(self.show_pitch_accent).lower(),
             'color_background': self.color_background,
             'color_foreground': self.color_foreground,
             'color_highlight_word': self.color_highlight_word,
@@ -208,7 +240,13 @@ class Config:
             'field_audio': self.anki_field_audio,
             'field_sentence_audio': self.anki_field_sentence_audio,
             'field_picture': self.anki_field_picture,
-            'field_frequency': self.anki_field_frequency
+            'field_frequency': self.anki_field_frequency,
+            'field_pitch': self.anki_field_pitch
+        }
+        config['Bridge'] = {
+            'enabled': str(self.bridge_enabled).lower(),
+            'port': str(self.bridge_port),
+            'token': self.bridge_token
         }
         with open('config.ini', 'w', encoding='utf-8') as configfile:
             config.write(configfile)

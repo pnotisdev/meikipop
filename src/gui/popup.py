@@ -1,5 +1,6 @@
 # src/gui/popup.py
 import logging
+import os
 import threading
 import time
 import datetime
@@ -27,6 +28,15 @@ if IS_MACOS:
 
 logger = logging.getLogger(__name__)
 
+_CIRCLED_DIGITS = ["⓪", "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"]
+
+
+def _format_pitch_accent(position: int) -> str:
+    """Formats a pitch-accent downstep position as a circled number (standard J-J dictionary notation)."""
+    if 0 <= position < len(_CIRCLED_DIGITS):
+        return _CIRCLED_DIGITS[position]
+    return f"({position})"
+
 
 class Popup(QWidget):
     def __init__(self, shared_state, input_loop):
@@ -47,6 +57,7 @@ class Popup(QWidget):
 
         self.shared_state = shared_state
         self.input_loop = input_loop
+        self.lookup = None  # set externally by main.py once the Lookup thread exists; provides dictionary.audio_map
 
         self.is_visible = False
         self.timer = QTimer(self)
@@ -285,6 +296,21 @@ class Popup(QWidget):
         url = f"https://jisho.org/search/{encoded_term}"
         webbrowser.open(url)
 
+    def _resolve_local_audio(self, word: str, reading: str) -> Optional[str]:
+        """Looks up a local/embedded audio source (from an imported Yomitan audio dictionary) for word+reading.
+        Returns a local file path, a direct URL, or None if nothing is available offline."""
+        lookup = getattr(self, 'lookup', None)
+        dictionary = getattr(lookup, 'dictionary', None)
+        audio_map = getattr(dictionary, 'audio_map', None)
+        if not audio_map:
+            return None
+
+        for key in ((word, reading), (word, ""), ("", reading)):
+            sources = audio_map.get(key)
+            if sources:
+                return sources[0]
+        return None
+
     def play_audio(self):
         latest_data, _ = self.get_latest_data()
         if not latest_data:
@@ -295,6 +321,16 @@ class Popup(QWidget):
         reading = entry.reading or ""
         
         if not word and not reading:
+            return
+
+        local_audio = self._resolve_local_audio(word, reading)
+        if local_audio:
+            logger.info(f"Playing local/embedded audio: {local_audio}")
+            if os.path.isfile(local_audio):
+                self.player.setSource(QUrl.fromLocalFile(local_audio))
+            else:
+                self.player.setSource(QUrl(local_audio))
+            self.player.play()
             return
 
         safe_word = urllib.parse.quote(word)
@@ -728,6 +764,10 @@ ruby:hover rt {
             config.anki_field_frequency,
             ["frequency", "freqsort", "freq", "freqrank"]
         )
+        target_pitch = resolve_field(
+            config.anki_field_pitch,
+            ["pitch", "pitchaccent", "accent", "accentgraph"]
+        )
         target_back = next((f for f in model_fields if f.lower() == "back"), None)
 
         # Decide where to drop audio. Prefer dedicated audio field, otherwise fall back to an existing field so Anki can inject the sound tag.
@@ -736,15 +776,29 @@ ruby:hover rt {
         if fallback_audio_field and (word or reading):
             import urllib.parse
 
-            safe_word = urllib.parse.quote(word or reading)
-            safe_reading = urllib.parse.quote(reading or word)
+            local_audio = self._resolve_local_audio(word, reading)
             audio_filename = f"meikipop-audio-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}.mp3"
-            audio_entry = {
-                "url": f"https://assets.languagepod101.com/dictionary/japanese/audiomp3.php?kanji={safe_word}&kana={safe_reading}",
-                "filename": audio_filename,
-                "skipHash": "7e2c2f954ef6051373ba916f000168dc",
-                "fields": [fallback_audio_field],
-            }
+
+            if local_audio and os.path.isfile(local_audio):
+                audio_filename = f"meikipop-audio-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}{os.path.splitext(local_audio)[1]}"
+                audio_entry = {
+                    "path": local_audio,
+                    "filename": audio_filename,
+                    "fields": [fallback_audio_field],
+                }
+                logger.info(f"Using local dictionary audio: {local_audio}")
+            else:
+                audio_url = local_audio if local_audio else None
+                if not audio_url:
+                    safe_word = urllib.parse.quote(word or reading)
+                    safe_reading = urllib.parse.quote(reading or word)
+                    audio_url = f"https://assets.languagepod101.com/dictionary/japanese/audiomp3.php?kanji={safe_word}&kana={safe_reading}"
+                audio_entry = {
+                    "url": audio_url,
+                    "filename": audio_filename,
+                    "skipHash": "7e2c2f954ef6051373ba916f000168dc",
+                    "fields": [fallback_audio_field],
+                }
             # If there is a separate sentence-audio field, attach audio there too
             # (sentence audio from a live source isn't available, but we leave the field
             # wired so AnkiConnect can inject it alongside the word audio)
@@ -798,10 +852,28 @@ ruby:hover rt {
         if target_frequency and freq_value:
             fields[target_frequency] = freq_value
 
-        # sentence_audio: Meikipop cannot capture sentence audio from screen, so we leave it empty.
+        if target_pitch and entry.pitch_accents:
+            fields[target_pitch] = ", ".join(str(p) for p in entry.pitch_accents)
+
+        # sentence_audio: capture a rolling clip of real system/loopback audio (if enabled) so the
+        # actual line-read from the game/video is attached, instead of just a synthesized word reading.
+        sentence_audio_field_value = ""
+        if target_sentence_audio and config.enable_sentence_audio_capture:
+            try:
+                from src.utils.audio_recorder import audio_recorder
+                clip_bytes = audio_recorder.get_clip_wav_bytes(config.sentence_audio_duration_seconds)
+                if clip_bytes:
+                    sentence_audio_filename = f"meikipop-sentence-audio-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}.wav"
+                    anki.store_media_file(sentence_audio_filename, base64.b64encode(clip_bytes).decode())
+                    sentence_audio_field_value = f"[sound:{sentence_audio_filename}]"
+                    logger.info(f"Captured {config.sentence_audio_duration_seconds}s of sentence audio -> {sentence_audio_filename}")
+                else:
+                    logger.debug("No sentence audio available (buffer empty or capture unsupported on this platform).")
+            except Exception as e:
+                logger.warning(f"Failed to capture sentence audio: {e}")
         # This prevents AnkiConnect from rejecting the note due to a missing required field.
         if target_sentence_audio:
-            fields[target_sentence_audio] = ""
+            fields[target_sentence_audio] = sentence_audio_field_value
 
         # 3. Handle "Back" field (catch-all for Basic cards)
         if target_back:
@@ -1014,6 +1086,11 @@ ruby:hover rt {
 
         if entry.reading:
             header_html += f'&nbsp;&nbsp;<span style="font-size:{fs_head}px; color:{c_read};">[{entry.reading}]</span>'
+
+        if config.show_pitch_accent and entry.pitch_accents:
+            pitch_str = "".join(_format_pitch_accent(p) for p in entry.pitch_accents)
+            header_html += f'&nbsp;<span style="font-size:{fs_head-2}px; color:{c_fg}; opacity:0.85;">{pitch_str}</span>'
+
         header_html += "</div>"
         
         # --- Tags (Frequency, POS, Misc, Deconjugation) ---

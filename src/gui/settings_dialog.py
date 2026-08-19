@@ -4,7 +4,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (QWidget, QDialog, QFormLayout, QComboBox,
                              QSpinBox, QCheckBox, QPushButton, QColorDialog, QVBoxLayout, QHBoxLayout,
-                             QGroupBox, QDialogButtonBox, QLabel, QSlider, QLineEdit, QDoubleSpinBox)
+                             QGroupBox, QDialogButtonBox, QLabel, QSlider, QLineEdit, QDoubleSpinBox,
+                             QApplication)
 
 from src.config.config import config, APP_NAME, IS_WINDOWS
 from src.gui.input import InputLoop
@@ -127,6 +128,17 @@ class SettingsDialog(QDialog):
             self.magpie_check.setChecked(config.magpie_compatibility)
             self.magpie_check.setToolTip("Enable transformations for compatibility with Magpie game scaler.")
             general_layout.addRow("Magpie Compatibility:", self.magpie_check)
+        self.sentence_audio_check = QCheckBox()
+        self.sentence_audio_check.setChecked(config.enable_sentence_audio_capture)
+        self.sentence_audio_check.setToolTip("Continuously records system/loopback audio so a real clip of the last N seconds can be attached to Anki cards (Alt+A), instead of just a synthesized word reading. Requires the optional 'soundcard' package.")
+        general_layout.addRow("Sentence Audio Capture:", self.sentence_audio_check)
+        self.sentence_audio_duration_spin = QDoubleSpinBox()
+        self.sentence_audio_duration_spin.setRange(1.0, 30.0)
+        self.sentence_audio_duration_spin.setDecimals(1)
+        self.sentence_audio_duration_spin.setSingleStep(0.5)
+        self.sentence_audio_duration_spin.setValue(config.sentence_audio_duration_seconds)
+        self.sentence_audio_duration_spin.setSuffix(" s")
+        general_layout.addRow("  Clip Duration:", self.sentence_audio_duration_spin)
         general_group.setLayout(general_layout)
         col1_layout.addWidget(general_group)
         
@@ -235,12 +247,34 @@ class SettingsDialog(QDialog):
         self.show_frequency_check = QCheckBox()
         self.show_frequency_check.setChecked(config.show_frequency)
         theme_layout.addRow("  Show Frequency:", self.show_frequency_check)
+        self.show_pitch_accent_check = QCheckBox()
+        self.show_pitch_accent_check.setChecked(config.show_pitch_accent)
+        self.show_pitch_accent_check.setToolTip("Requires a pitch-accent Yomitan dictionary (e.g. Kanjium) in user_dictionaries.")
+        theme_layout.addRow("  Show Pitch Accent:", self.show_pitch_accent_check)
         self.anki_hover_status_check = QCheckBox()
         self.anki_hover_status_check.setChecked(config.anki_show_hover_status)
         self.anki_hover_status_check.setToolTip("Show a small indicator when hovering if the word is already in your Anki deck.")
         theme_layout.addRow("  Show Anki Hover Status:", self.anki_hover_status_check)
         theme_group.setLayout(theme_layout)
         col2_layout.addWidget(theme_group)
+
+        # Mining Bridge Group (local server for the companion browser extension)
+        bridge_group = QGroupBox("Mining Bridge (Browser Extension)")
+        bridge_layout = QFormLayout()
+        self.bridge_enabled_check = QCheckBox()
+        self.bridge_enabled_check.setChecked(config.bridge_enabled)
+        self.bridge_enabled_check.setToolTip("Opens a loopback-only (127.0.0.1) HTTP server so the companion browser extension can submit mined subtitle text, video frames and audio clips.")
+        bridge_layout.addRow("Enabled:", self.bridge_enabled_check)
+        self.bridge_port_spin = QSpinBox()
+        self.bridge_port_spin.setRange(1024, 65535)
+        self.bridge_port_spin.setValue(config.bridge_port)
+        bridge_layout.addRow("Port:", self.bridge_port_spin)
+        copy_token_btn = QPushButton("Copy Pairing Token")
+        copy_token_btn.setToolTip("Copies the port + pairing token as JSON. Paste it into the browser extension's options page.")
+        copy_token_btn.clicked.connect(self._copy_bridge_pairing_info)
+        bridge_layout.addRow("", copy_token_btn)
+        bridge_group.setLayout(bridge_layout)
+        col2_layout.addWidget(bridge_group)
         col2_layout.addStretch()
 
         # --- Column 3: Dictionaries ---
@@ -313,6 +347,11 @@ class SettingsDialog(QDialog):
             self._update_color_buttons()
             self._mark_as_custom()
 
+    def _copy_bridge_pairing_info(self):
+        import json
+        pairing = json.dumps({"port": self.bridge_port_spin.value(), "token": config.bridge_token})
+        QApplication.clipboard().setText(pairing)
+
     def save_and_accept(self):
         # Update OCR Provider
         selected_provider = self.ocr_provider_combo.currentText()
@@ -332,6 +371,12 @@ class SettingsDialog(QDialog):
         if IS_WINDOWS:
             config.magpie_compatibility = self.magpie_check.isChecked()
 
+        config.enable_sentence_audio_capture = self.sentence_audio_check.isChecked()
+        config.sentence_audio_duration_seconds = self.sentence_audio_duration_spin.value()
+
+        config.bridge_enabled = self.bridge_enabled_check.isChecked()
+        config.bridge_port = self.bridge_port_spin.value()
+
         config.enable_jmdict = self.enable_jmdict_check.isChecked()
         config.max_popup_width = self.max_width_spin.value()
         config.max_popup_height = self.max_height_spin.value()
@@ -348,6 +393,7 @@ class SettingsDialog(QDialog):
         config.show_pos = self.show_pos_check.isChecked()
         config.show_tags = self.show_tags_check.isChecked()
         config.show_frequency = self.show_frequency_check.isChecked()
+        config.show_pitch_accent = self.show_pitch_accent_check.isChecked()
         config.anki_show_hover_status = self.anki_hover_status_check.isChecked()
         selected_friendly_name = self.popup_position_combo.currentText()
         config.popup_position_mode = self.popup_mode_map.get(selected_friendly_name, "flip_vertically")
@@ -359,6 +405,17 @@ class SettingsDialog(QDialog):
         config.font_size_header = self.font_size_header_spin.value()
         config.font_size_definitions = self.font_size_def_spin.value()
         config.save()
+
+        from src.utils.audio_recorder import audio_recorder
+        if config.enable_sentence_audio_capture:
+            audio_recorder.start_capturing()
+        else:
+            audio_recorder.stop_capturing()
+
+        from src.webbridge.server import start_bridge, stop_bridge
+        stop_bridge()  # always restart so a changed port takes effect
+        if config.bridge_enabled:
+            start_bridge(self.lookup)
 
         # Tell the live components to re-apply settings
         self.input_loop.reapply_settings()
